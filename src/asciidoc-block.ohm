@@ -1,0 +1,39 @@
+/*
+  Hacked version of the oh-my-asciidoc grammar, designed to have only a single
+  application of any rule.
+  Ignored:
+  - eol (it doesn't appear in the CST anyways)
+  - any (we handle those manually)
+
+  Assuming the following IDs for each *application*:
+
+    const id = {
+      document: "a",
+      header: "b",
+      body: "c",
+      section_block: "d",
+      paragraph: "e",
+      title_content: "f",
+      line: "g",
+      line2: "h",
+    };
+ */
+asciidocBlock {
+  document = "\n"* header? body
+  //             ^i      ^j
+  header = title_content
+  body = section_block* "\n"?
+  //                  ^k   ^l
+  section_block = "\n"* paragraph
+  //                  ^m
+  paragraph = line
+
+  title_content = line2
+  line = (~eol any)+
+  //               ^ removed during processing
+  line2 = (~eol any)+
+  //                ^ removed during processing
+
+  eol = "\n" | end
+  //           ^ never appears in the CST
+}
