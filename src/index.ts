@@ -1,3 +1,12 @@
+import { schema } from "prosemirror-schema-basic";
+import { EditorState } from "prosemirror-state";
+import { EditorView } from "prosemirror-view";
+import { Slice } from "prosemirror-model";
+import { ReplaceStep } from "prosemirror-transform";
+import { undo, redo, history } from "prosemirror-history";
+import { keymap } from "prosemirror-keymap";
+import { baseKeymap } from "prosemirror-commands";
+
 import * as ohm from "ohm-js";
 
 const id = {
@@ -95,7 +104,7 @@ const semantics = g.createSemantics().addOperation("rawCst()", {
   },
 });
 
-const state = new Map();
+let stateMap = new Map();
 
 function runCleanup(newNodes) {
   const oldNodes = liveNodes;
@@ -104,13 +113,14 @@ function runCleanup(newNodes) {
     .filter((n) => !liveNodes.has(n))
     .toReversed()
     .forEach((n) => {
-      if (state.has(n)) {
-        const { cleanupFn } = state.get(n);
+      if (stateMap.has(n)) {
+        const { cleanupFn } = stateMap.get(n);
         console.log("disposing", `${n.ctorName}`);
         if (cleanupFn) {
           console.log("calling cleanup");
           cleanupFn();
         }
+        stateMap.delete(n);
       }
     });
 }
@@ -118,15 +128,15 @@ function runCleanup(newNodes) {
 function useState(ctx, create) {
   let val;
   const k = ctx._node;
-  if (state.has(ctx._node)) {
-    val = state.get(k).val;
+  if (stateMap.has(ctx._node)) {
+    val = stateMap.get(k).val;
   } else {
     let cleanupFn;
     const onCleanup = (cb) => {
       cleanupFn = cb;
     };
     val = create(onCleanup);
-    state.set(k, { val, cleanupFn });
+    stateMap.set(k, { val, cleanupFn });
   }
   return val;
 }
@@ -202,7 +212,7 @@ function printTree(node, depth = 1, idx = undefined) {
     printTree(c, depth + 1, idx);
   });
 }
-const m = g.matcher();
+let m = g.matcher();
 m.setInput("= MyTitle\nhello world\n");
 const cst = (m: Matcher) => semantics(m.match()).rawCst();
 
@@ -318,3 +328,100 @@ m.replaceInputRange(10, 30, "ONE-Pub\n");
 result = m.match();
 runCleanup();
 root.appendChild(semantics(result).render);
+
+// ProseMirror stuff begins here
+
+m = g.matcher();
+m.setInput("= MyTitle\nhello world\n");
+
+let state = EditorState.create({
+  schema,
+  plugins: [
+    history(),
+    keymap({ "Mod-z": undo, "Mod-y": redo }),
+    keymap(baseKeymap),
+  ],
+});
+let view = new EditorView(document.querySelector("#pm-root"), {
+  state,
+  dispatchTransaction(transaction) {
+    console.log(
+      "Document size went from",
+      transaction.before.content.size,
+      "to",
+      transaction.doc.content.size,
+    );
+    let newState = view.state.apply(transaction);
+    view.updateState(newState);
+  },
+});
+
+stateMap = new Map();
+liveNodes = new Set(semantics(result).allNodes());
+
+let nextTr;
+
+semantics.addAttribute("renderPM", {
+  document(iterNl, optHeader, body) {
+    // const el = useState(this, (onCleanup) => {
+    // });
+    nextTr = view.state.tr;
+    const h = optHeader.child(0)?.renderPM;
+    body.renderPM;
+    const docBefore = view.state.doc;
+    let inverted = nextTr.steps.map((step, i) => step.invert(nextTr.docs[i]));
+    view.dispatch(nextTr);
+    useState(this, (onCleanup) => {
+      onCleanup(() => {
+        const tr = state.tr;
+        let i = 0;
+        for (let step of inverted.reverse()) {
+          console.log("step", i);
+          tr.step(step);
+        }
+        view.dispatch(tr);
+      });
+    });
+  },
+  line(x) {
+    nextTr = nextTr.insertText(this.sourceString, this.source.startIdx);
+  },
+  line2(x) {
+    nextTr = nextTr.insertText(this.sourceString, this.source.startIdx);
+  },
+  body(sectionBlockIter, optNl) {
+    // const el = useState(this, () => {
+    //   const div = document.createElement("div");
+    //   div.className = "body";
+    //   return div;
+    // });
+    sectionBlockIter.children.forEach((sb) => {
+      sb.renderPM;
+    });
+  },
+  section_block(iterNl, para) {
+    // const el = useState(this, () => {
+    //   const div = document.createElement("div");
+    //   div.className = "section-block";
+    //   return div;
+    // });
+    para.renderPM;
+  },
+  header(titleContent) {
+    titleContent.renderPM;
+  },
+});
+
+m.replaceInputRange(10, 10, "ONE-Pub\n");
+
+result = m.match();
+console.log("cleanup1");
+runCleanup();
+semantics(result).renderPM;
+
+// m.replaceInputRange(10, 30, "ONE-Pub\n");
+
+// result = m.match();
+// console.log("cleanup2");
+// runCleanup();
+// semantics(result).renderPM;
