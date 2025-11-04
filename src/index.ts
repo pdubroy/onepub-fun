@@ -44,9 +44,8 @@ const g = ohm.grammar(String.raw`
     body = section_block* "\n"?
     section_block = "\n"* paragraph
     paragraph = line
-    title_content = line2
+    title_content = line
     line = (~eol any)+
-    line2 = (~eol any)+
     eol = "\n" | end
   }`);
 const semantics = g.createSemantics().addOperation("rawCst()", {
@@ -64,17 +63,6 @@ const semantics = g.createSemantics().addOperation("rawCst()", {
     };
   },
   line(iterAny) {
-    const key = checkNotNull(id[this.ctorName]);
-    return {
-      _node: this._node,
-      type: this.ctorName,
-      key,
-      children: [this.sourceString],
-      startIdx: this.source.startIdx,
-      endIdx: this.source.endIdx,
-    };
-  },
-  line2(iterAny) {
     const key = checkNotNull(id[this.ctorName]);
     return {
       _node: this._node,
@@ -106,16 +94,19 @@ const semantics = g.createSemantics().addOperation("rawCst()", {
 
 let stateMap = new Map();
 
-function runCleanup(newNodes) {
-  const oldNodes = liveNodes;
-  liveNodes = new Set(semantics(result).allNodes());
-  [...oldNodes]
+function runCleanup(matchResult) {
+  genId++;
+  // List of old nodes in the reverse order in which they were visited last time.
+  const oldNodes = [...liveNodes]
+    .sort(([a, orderA], [b, orderB]) => orderA - orderB)
+    .map(([n, _]) => n);
+  liveNodes = getLiveNodes(matchResult);
+  oldNodes
     .filter((n) => !liveNodes.has(n))
-    .toReversed()
     .forEach((n) => {
       if (stateMap.has(n)) {
-        const { cleanupFn } = stateMap.get(n);
-        console.log("disposing", `${n.ctorName}`);
+        const { cleanupFn, id, genId } = stateMap.get(n);
+        console.log("disposing", `${n.ctorName} (id ${id}, genId ${genId})`);
         if (cleanupFn) {
           console.log("calling cleanup");
           cleanupFn();
@@ -124,6 +115,9 @@ function runCleanup(newNodes) {
       }
     });
 }
+
+let stateId = 0;
+let genId = 0;
 
 function useState(ctx, create) {
   let val;
@@ -136,19 +130,27 @@ function useState(ctx, create) {
       cleanupFn = cb;
     };
     val = create(onCleanup);
-    stateMap.set(k, { val, cleanupFn });
+    stateMap.set(k, { val, cleanupFn, id: stateId++, genId });
   }
   return val;
 }
 
+let allNodesOrderCounter = 0;
 semantics.addOperation("allNodes()", {
   _default(...children) {
-    return [this._node, ...children.flatMap((c) => c.allNodes())];
+    return [
+      [this._node, allNodesOrderCounter++],
+      ...children.flatMap((c) => c.allNodes()),
+    ];
   },
   _iter(...children) {
     return [...children.flatMap((c) => c.allNodes())];
   },
 });
+const getLiveNodes = (result) => {
+  allNodesOrderCounter = 0;
+  return new Map(semantics(result).allNodes());
+};
 
 semantics.addAttribute("render", {
   document(iterNl, optHeader, body) {
@@ -169,9 +171,6 @@ semantics.addAttribute("render", {
     return el;
   },
   line(x) {
-    return document.createTextNode(this.sourceString);
-  },
-  line2(x) {
     return document.createTextNode(this.sourceString);
   },
   body(sectionBlockIter, optNl) {
@@ -309,7 +308,7 @@ root.innerHTML = "";
 let result = m.match();
 root.appendChild(semantics(result).render);
 
-let liveNodes = new Set(semantics(result).allNodes());
+let liveNodes = getLiveNodes(result);
 
 m.replaceInputRange(10, 10, "ONE-Pub\n");
 
@@ -317,7 +316,7 @@ const cst2 = cst(m);
 printTree(cst2);
 // root.innerHTML = "";
 result = m.match();
-runCleanup();
+runCleanup(result);
 root.appendChild(semantics(result).render);
 
 m.replaceInputRange(10, 30, "ONE-Pub\n");
@@ -326,13 +325,12 @@ m.replaceInputRange(10, 30, "ONE-Pub\n");
 // printTree(cst3);
 // root.innerHTML = "";
 result = m.match();
-runCleanup();
+runCleanup(result);
 root.appendChild(semantics(result).render);
 
 // ProseMirror stuff begins here
 
-m = g.matcher();
-m.setInput("= MyTitle\nhello world\n");
+console.log("PM stuff here ----------------");
 
 let state = EditorState.create({
   schema,
@@ -357,54 +355,51 @@ let view = new EditorView(document.querySelector("#pm-root"), {
 });
 
 stateMap = new Map();
-liveNodes = new Set(semantics(result).allNodes());
+liveNodes = getLiveNodes(result);
 
 let nextTr;
 
+const useCleanup = (ctx, cb) => {
+  useState(ctx, (onCleanup) => onCleanup(cb));
+};
+
+const dispatchNextTr = () => {
+  if (nextTr.steps.length > 0) {
+    view.dispatch(nextTr);
+    nextTr = view.state.tr;
+  }
+};
+
 semantics.addAttribute("renderPM", {
   document(iterNl, optHeader, body) {
-    // const el = useState(this, (onCleanup) => {
-    // });
     nextTr = view.state.tr;
     const h = optHeader.child(0)?.renderPM;
     body.renderPM;
-    const docBefore = view.state.doc;
-    let inverted = nextTr.steps.map((step, i) => step.invert(nextTr.docs[i]));
-    view.dispatch(nextTr);
-    useState(this, (onCleanup) => {
-      onCleanup(() => {
-        const tr = state.tr;
-        let i = 0;
-        for (let step of inverted.reverse()) {
-          console.log("step", i);
-          tr.step(step);
-        }
-        view.dispatch(tr);
-      });
+
+    dispatchNextTr();
+    useCleanup(this, () => {
+      console.log("doc onCleanup");
+      // view.dispatch(nextTr);
     });
   },
   line(x) {
-    nextTr = nextTr.insertText(this.sourceString, this.source.startIdx);
-  },
-  line2(x) {
-    nextTr = nextTr.insertText(this.sourceString, this.source.startIdx);
+    const startPos = nextTr.doc.content.size;
+    nextTr.insertText(this.sourceString, startPos);
+    const endPos = nextTr.doc.content.size;
+    console.log(
+      `inserted text: "${this.sourceString}" at ${startPos}..${endPos}`,
+    );
+    useCleanup(this, () => {
+      console.log("line onCleanup", startPos, endPos);
+      nextTr.delete(startPos, endPos);
+    });
   },
   body(sectionBlockIter, optNl) {
-    // const el = useState(this, () => {
-    //   const div = document.createElement("div");
-    //   div.className = "body";
-    //   return div;
-    // });
     sectionBlockIter.children.forEach((sb) => {
       sb.renderPM;
     });
   },
   section_block(iterNl, para) {
-    // const el = useState(this, () => {
-    //   const div = document.createElement("div");
-    //   div.className = "section-block";
-    //   return div;
-    // });
     para.renderPM;
   },
   header(titleContent) {
@@ -412,16 +407,36 @@ semantics.addAttribute("renderPM", {
   },
 });
 
-m.replaceInputRange(10, 10, "ONE-Pub\n");
+console.log("initial doc size:", state.doc.content.size);
+
+m = g.matcher();
+m.setInput("= MyTitle\nhello world\n");
+console.log(m._input);
 
 result = m.match();
 console.log("cleanup1");
-runCleanup();
+nextTr = state.tr;
+runCleanup(result);
+dispatchNextTr();
+console.log("done cleanup");
 semantics(result).renderPM;
 
-// m.replaceInputRange(10, 30, "ONE-Pub\n");
+m.replaceInputRange(10, 10, "ONE-Pub\n");
+console.log(m._input);
 
-// result = m.match();
-// console.log("cleanup2");
-// runCleanup();
-// semantics(result).renderPM;
+result = m.match();
+console.log("cleanup2");
+runCleanup(result);
+console.log(nextTr);
+dispatchNextTr();
+console.log("done cleanup");
+semantics(result).renderPM;
+
+m.replaceInputRange(10, 30, "buP-ENO\n");
+console.log(m._input);
+
+result = m.match();
+console.log("cleanup3");
+runCleanup(result);
+dispatchNextTr();
+semantics(result).renderPM;
