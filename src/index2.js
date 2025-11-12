@@ -7,18 +7,27 @@ import { undo, redo, history } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
 import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
-import { Fragment } from "prosemirror-model";
+import { Fragment, Slice } from "prosemirror-model";
 
-let state, view;
+const assert = {
+  equal(a, b) {
+    if (a !== b) {
+      throw new Error(`Assertion failed: ${a} !== ${b}`);
+    }
+  },
+};
+
+let state = EditorState.create({
+  schema,
+  plugins: [
+    history(),
+    keymap({ "Mod-z": undo, "Mod-y": redo }),
+    keymap(baseKeymap),
+  ],
+});
+
+let view;
 if (typeof document !== "undefined") {
-  state = EditorState.create({
-    schema,
-    plugins: [
-      history(),
-      keymap({ "Mod-z": undo, "Mod-y": redo }),
-      keymap(baseKeymap),
-    ],
-  });
   view = new EditorView(document.querySelector("#pm-root"), {
     state,
     dispatchTransaction(transaction) {
@@ -36,14 +45,19 @@ if (typeof document !== "undefined") {
 
 const g = ohm.grammar(String.raw`
   asciidocBlock {
-    document = "\n"* header? body
+    document = nl* header? body
     header = title_content
-    body = section_block* "\n"?
-    section_block = "\n"* paragraph
+    body = section_block* nl?
+    section_block = nl* paragraph
     paragraph = line
     title_content = line
     line = (~eol any)+
-    eol = "\n" | end
+    eol = nl | end
+
+    // We need this b/c we need a memoization boundary.
+    // Terminals and iters aren't memoized, so something like "\n"*
+    // will always appear to be a changed node.
+    nl = "\n"
   }`);
 
 let currGenId = 0;
@@ -64,92 +78,97 @@ function checkNotNull(val, msg) {
   return val;
 }
 
-const semantics = g.createSemantics().addAttribute("ast", {
-  _nonterminal: handleNonterminal,
-  _terminal() {
-    return this.sourceString;
-  },
-  _iter(...children) {
+const semantics = g.createSemantics().addAttribute(
+  "ast",
+  (() => {
+    function handleNonterminal(...children) {
+      // const key = checkNotNull(id[this.ctorName]);
+      return {
+        // _node: this._node,
+        type: this.ctorName,
+        genId: currGenId,
+        minGenId: Math.min(...children.map((c) => c.ast.minGenId)),
+        // key,
+        children: children.map((c) => c.ast),
+        startIdx: this.source.startIdx,
+        endIdx: this.source.endIdx,
+      };
+    }
+
     return {
-      // _node: this._node,
-      type: this.ctorName,
-      genId: currGenId,
-      children: children.map((c) => c.ast),
-      startIdx: this.source.startIdx,
-      endIdx: this.source.endIdx,
+      _nonterminal: handleNonterminal,
+      _terminal() {
+        // console.log(this.ctorName, JSON.stringify(this.sourceString), `@${this.source.startIdx}`);
+        return {
+          value: this.sourceString,
+          minGenId: currGenId,
+          genId: currGenId,
+        };
+      },
+      _iter(...children) {
+        // console.log(this.ctorName, JSON.stringify(this.sourceString), `@${this.source.startIdx}`);
+
+        // Because _iter actions aren't memoized (only non-terminal actions are), we don't want to get the new genId
+        // unless the children have changed.
+        const genId = Math.max(-1, ...children.map((c) => c.ast.genId));
+        return {
+          // _node: this._node,
+          type: this.ctorName,
+          genId,
+          minGenId: Math.min(currGenId, ...children.map((c) => c.ast.minGenId)),
+          children: children.map((c) => c.ast),
+          startIdx: this.source.startIdx,
+          endIdx: this.source.endIdx,
+        };
+      },
+      line(iterAny) {
+        const key = checkNotNull(id[this.ctorName]);
+        return {
+          // _node: this._node,
+          type: this.ctorName,
+          genId: currGenId,
+          minGenId: currGenId,
+          key,
+          children: [this.sourceString],
+          startIdx: this.source.startIdx,
+          endIdx: this.source.endIdx,
+        };
+      },
+      document(iterNl, optHeader, body) {
+        console.log({ currGenId });
+        const ans = handleNonterminal.call(this, iterNl, optHeader, body);
+        ans.children[0].key = "i";
+        ans.children[1].key = "j";
+        return ans;
+      },
+      body(iterSectionBlock, optNl) {
+        const ans = handleNonterminal.call(this, iterSectionBlock, optNl);
+        ans.children[0].key = "k";
+        ans.children[1].key = "l";
+        return ans;
+      },
+      section_block(iterNl, para) {
+        const ans = handleNonterminal.call(this, iterNl, para);
+        ans.children[0].key = "m";
+        return ans;
+      },
     };
-  },
-  line(iterAny) {
-    const key = checkNotNull(id[this.ctorName]);
-    return {
-      // _node: this._node,
-      type: this.ctorName,
-      genId: currGenId,
-      key,
-      children: [this.sourceString],
-      startIdx: this.source.startIdx,
-      endIdx: this.source.endIdx,
-    };
-  },
-  document(iterNl, optHeader, body) {
-    const ans = handleNonterminal.call(this, iterNl, optHeader, body);
-    ans.children[0].key = "i";
-    ans.children[1].key = "j";
-    return ans;
-  },
-  body(iterSectionBlock, optNl) {
-    const ans = handleNonterminal.call(this, iterSectionBlock, optNl);
-    ans.children[0].key = "k";
-    ans.children[1].key = "l";
-    return ans;
-  },
-  section_block(iterNl, para) {
-    const ans = handleNonterminal.call(this, iterNl, para);
-    ans.children[0].key = "m";
-    return ans;
-  },
-});
+  })(),
+);
 
-function handleNonterminal(...children) {
-  const key = checkNotNull(id[this.ctorName]);
-  return {
-    // _node: this._node,
-    type: this.ctorName,
-    genId: currGenId,
-    key,
-    children: children.map((c) => c.ast),
-    startIdx: this.source.startIdx,
-    endIdx: this.source.endIdx,
-  };
-}
-
-const toAst = (result) => {
-  currGenId += 1;
-  return semantics(result).ast;
-};
-
+// pmNodes represents the ProseMirror representation of the parse tree.
+// Ideally we would walk the AST here, not the CST.
 semantics.addAttribute("pmNodes", {
-  _default(...children) {
-    return children.flatMap(c => c.pmNodes);
-  },
-  _terminal() {
-    return schema.text(this.sourceString);
+  document(iterNl, optHeader, body) {
+    return [...([optHeader.child(0)?.pmNodes] ?? []), ...body.pmNodes];
   },
   header(title_content) {
     return schema.node("paragraph", null, [
-      schema.text(title_content.sourceString)
-    ]);
-  },
-  document(iterNl, optHeader, body) {
-    console.log(optHeader.child(0)?.pmNodes);
-    console.log('^^^');
-    return schema.node("doc", null, [
-      ...([optHeader.child(0)?.pmNodes] ?? []),
-      ...body.pmNodes,
+      schema.text(title_content.sourceString),
     ]);
   },
   body(iterSectionBlock, optNl) {
-    return iterSectionBlock.children.flatMap(c => c.pmNodes);
+    return iterSectionBlock.children.flatMap((c) => c.pmNodes);
   },
   section_block(iterNl, para) {
     return para.pmNodes;
@@ -160,31 +179,136 @@ semantics.addAttribute("pmNodes", {
   line(iterAny) {
     return schema.text(this.sourceString);
   },
+  _default(...children) {
+    return children.flatMap((c) => c.pmNodes);
+  },
+  _terminal() {
+    return schema.text(this.sourceString);
+  },
 });
 
-semantics.addOperation("pmEdit(offset)", {
-  _nonterminal(...children) {
-    let { offset } = this.args;
-    const ans = [];
-    for (const child of this.children) {
-      offset += child.pmEdit(offset).length;
+// The idea here is to walk the tree, and recurse only into nodes
+// that have changed since the last time we did this (using genId).
+// - For a node that has fully changed (i.e., is totally new) we don't need to recurse,
+//   we can just insert its pmNodes.
+// - For a node that has NOT changed, we don't need to recurse.
+// - We only need to recurse into nodes that have some changed content, and some
+//   reused content. For those we need to produce a slice representing the new content.
+semantics.addOperation("pmEdit(offset, maxOffset)", {
+  document(iterNl, optHeader, body) {
+    const { offset, maxOffset } = this.args;
+    const { minGenId, genId } = this.ast;
+    console.log({ minGenId, currGenId });
+    if (genId < currGenId) {
+      console.log("doc hasn't changed");
+      return [];
+    } else if (minGenId === currGenId) {
+      return [
+        new ReplaceStep(
+          offset,
+          maxOffset,
+          new Slice(Fragment.from(this.pmNodes), 0, 0),
+        ),
+      ];
+    } else {
+      console.log("doc is partially changed");
+      const fc = firstChanged(this.children, 0);
+      console.log("first changed", fc.node, fc.offset);
+      return [];
     }
-    return ans;
   },
-  section_block(iterNl, para) {},
-  paragraph(line) {},
-  line(iterAny) {
-    // return new ReplaceStep();
+  _default(...children) {
+    let { offset, maxOffset } = this.args;
+    return children.flatMap((c) => c.pmEdit(offset, maxOffset));
   },
 });
 
-const r = g.match("= Title\n\nHello world");
-console.log(toAst(r));
-console.log(semantics(r).pmNodes);
-if (view) {
-  // view.dispatch(view.state.tr.replace(0, view.state.doc.content.size, semantics(r).pmFrag));
-  const node = schema.text('hello world');
-  view.dispatch(
-    view.state.tr.replaceWith(0, view.state.doc.content.size, node))
-  console.log(view.state.doc === node);
+// Ugh…would be better if we didn't have to do this. Probably pmNodes should always return a proper
+// ProseMirror Node.
+function pmSize(nodeOrArray) {
+  return Array.isArray(nodeOrArray)
+    ? nodeOrArray.reduce((sum, n) => sum + pmSize(n), 0)
+    : nodeOrArray.nodeSize;
 }
+
+function firstChanged(nodes, initialPos, depth) {
+  console.log("  ".repeat(depth) + `firstChanged(${initialPos}`);
+  let pos = initialPos;
+  for (const n of nodes) {
+    if (n.ast.genId === currGenId) {
+      return n.ctorName === "_terminal"
+        ? pos
+        : firstChanged(n.children, pos + 1, depth+1);
+    }
+    pos += pmSize(n.pmNodes);
+  }
+  throw new Error("impossible");
+}
+
+// function changedSlice(nodes) {
+//   let startPos = -1;
+//   let endPos = -1;
+
+//   // Note: We shouldn't be walking the CST here, but the pmNodes tree.
+//   // But, since they map 1-to-1 right now, this is fine.
+//   function walk(nodes, pos) {
+//     for (const n of nodes) {
+//       if (n.ctorName === "_terminal") {
+//         if (startPos === -1 && n.ast.genId === currGenId) {
+//           startPos = pos;
+//         } else if (startPos > -1 && n.ast.genId !== currGenId) {
+//           endPos = pos;
+//           return true; // Done
+//         }
+//       } else if (walk(n.children, pos + 1)) {
+//         break;
+//       }
+//       offset += pmSize(n.pmNodes);
+//     }
+//     return startPos !== -1 && endPos
+//   }
+
+//   return walk(nodes, 0);
+// }
+
+let m = g.matcher();
+const makeEdit = (startIdx, endIdx, str) => {
+  m.replaceInputRange(startIdx, endIdx, str);
+  currGenId += 1;
+  return semantics(m.match());
+};
+
+let root = makeEdit(0, 0, "= Title\n\nHello world");
+console.log(root.ast);
+console.log(root.pmNodes);
+
+const intoTr = (edits) =>
+  edits.reduce((tr, step) => {
+    return tr.step(step);
+  }, state.tr);
+
+const updateView = () => {
+  if (view) view.dispatch(intoTr(root.pmEdit(0, view.state.doc.content.size)));
+};
+
+updateView();
+
+console.log("FAKE EDIT ----");
+// m.replaceInputRange(15, 20, "universe");
+root = makeEdit(0, 0, "");
+// updateView();
+
+console.log("REAL EDIT ----");
+root = makeEdit(15, 20, "universe");
+// console.log(changedSlice([root]));
+// updateView();
+if (view)
+  // This is the correct edit - replace `world` with `universe`.
+  view.dispatch(
+    view.state.tr.replaceRange(
+      16,
+      22,
+      new Slice(Fragment.from(schema.text("universe")), 0, 0),
+    ),
+  );
+assert.equal(firstChanged([root], -1), 16);
