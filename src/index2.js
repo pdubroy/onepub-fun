@@ -156,34 +156,61 @@ const semantics = g.createSemantics().addAttribute(
   })(),
 );
 
+let nodeInfo = new WeakMap();
+let parentInfo = new WeakMap();
+
+// Helper to create a ProseMirror node, and store generation info and parent info
+// in the WeakMaps.
+function pmNode(ohmNode, nodeType, childrenOrContent) {
+  const ans =
+    nodeType === "text"
+      ? schema.text(childrenOrContent)
+      : schema.node(nodeType, null, childrenOrContent);
+  nodeInfo.set(ans, {
+    genId: ohmNode.ast.genId,
+    minGenId: ohmNode.ast.minGenId,
+  });
+  if (Array.isArray(childrenOrContent)) {
+    childrenOrContent.forEach((c) => {
+      parentInfo.set(c, ans);
+    });
+  }
+  return ans;
+}
+
 // pmNodes represents the ProseMirror representation of the parse tree.
 // Ideally we would walk the AST here, not the CST.
 semantics.addAttribute("pmNodes", {
   document(iterNl, optHeader, body) {
-    return [...([optHeader.child(0)?.pmNodes] ?? []), ...body.pmNodes];
+    return pmNode(this, "doc", [
+      ...([optHeader.child(0)?.pmNodes] ?? []),
+      ...body.pmNodes,
+    ]);
   },
   header(title_content) {
-    return schema.node("paragraph", null, [
-      schema.text(title_content.sourceString),
+    return pmNode(this, "paragraph", [
+      pmNode(title_content, "text", title_content.sourceString),
     ]);
   },
   body(iterSectionBlock, optNl) {
+    // No gen info, b/c there's no associated pmNode.
     return iterSectionBlock.children.flatMap((c) => c.pmNodes);
   },
   section_block(iterNl, para) {
+    // No gen info, b/c there's no associated pmNode.
     return para.pmNodes;
   },
   paragraph(line) {
-    return schema.node("paragraph", null, line.pmNodes);
+    return pmNode(this, "paragraph", line.pmNodes);
   },
   line(iterAny) {
-    return schema.text(this.sourceString);
+    return pmNode(this, "text", this.sourceString);
   },
   _default(...children) {
     return children.flatMap((c) => c.pmNodes);
   },
   _terminal() {
-    return schema.text(this.sourceString);
+    return pmNode(this, "text", this.sourceString);
   },
 });
 
@@ -203,16 +230,13 @@ semantics.addOperation("pmEdit(offset, maxOffset)", {
       console.log("doc hasn't changed");
       return [];
     } else if (minGenId === currGenId) {
+      const doc = this.pmNodes;
       return [
-        new ReplaceStep(
-          offset,
-          maxOffset,
-          new Slice(Fragment.from(this.pmNodes), 0, 0),
-        ),
+        new ReplaceStep(offset, maxOffset, doc.slice(0, doc.content.size)),
       ];
     } else {
       console.log("doc is partially changed");
-      const fc = firstChanged(this.children, 0);
+      const fc = firstChanged(this.pmNodes, 0);
       console.log("first changed", fc.node, fc.offset);
       return [];
     }
@@ -231,18 +255,27 @@ function pmSize(nodeOrArray) {
     : nodeOrArray.nodeSize;
 }
 
-function firstChanged(nodes, initialPos, depth) {
-  console.log("  ".repeat(depth) + `firstChanged(${initialPos}`);
+function firstChanged(n, initialPos, depth=0) {
+  const log = (str) => console.log("  ".repeat(depth) + str);
+
+  log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
-  for (const n of nodes) {
-    if (n.ast.genId === currGenId) {
-      return n.ctorName === "_terminal"
-        ? pos
-        : firstChanged(n.children, pos + 1, depth+1);
-    }
-    pos += pmSize(n.pmNodes);
+  const { genId, minGenId } = checkNotNull(nodeInfo.get(n));
+  log(`- type=${n.type}, genId=${genId}, minGenId=${minGenId}, currGenId=${currGenId}`);
+
+  if (genId < currGenId) return -1; // Nothing changed in this subtree.
+
+  if (n.type.name === "text") return pos; // Found the first change!
+
+  // Not a text node, and something changed in this subtree.
+  pos += 1; // Account for the opening of this node.
+
+  for (const child of n.children) {
+    const ans = firstChanged(child, pos, depth + 1);
+    if (ans !== -1) return ans; // Found it!
+    pos += child.nodeSize;
   }
-  throw new Error("impossible");
+  return -1;
 }
 
 // function changedSlice(nodes) {
@@ -311,4 +344,9 @@ if (view)
       new Slice(Fragment.from(schema.text("universe")), 0, 0),
     ),
   );
-assert.equal(firstChanged([root], -1), 16);
+
+// We should find the position just before the "Hello universe" text node.
+const pos = firstChanged(root.pmNodes, -1);
+const n = root.pmNodes.nodeAt(pos);
+assert.equal(n.type.name, 'text');
+assert.equal(n.text, "Hello universe");
