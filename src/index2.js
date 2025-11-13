@@ -9,12 +9,14 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
-const assert = {
-  equal(a, b) {
-    if (a !== b) {
-      throw new Error(`Assertion failed: ${a} !== ${b}`);
-    }
-  },
+function assert(cond, message) {
+  if (!cond) throw new Error(message || "Assertion failed");
+}
+
+assert.equal = (a, b) => {
+  if (a !== b) {
+    throw new Error(`Assertion failed: ${a} !== ${b}`);
+  }
 };
 
 let state = EditorState.create({
@@ -172,7 +174,10 @@ function pmNode(ohmNode, nodeType, childrenOrContent) {
   });
   if (Array.isArray(childrenOrContent)) {
     childrenOrContent.forEach((c) => {
-      parentInfo.set(c, ans);
+      // We maintain a list of all observed parents of a given node.
+      const arr = parentInfo.get(c) || [];
+      arr.push(ans);
+      parentInfo.set(c, arr);
     });
   }
   return ans;
@@ -264,7 +269,9 @@ function pmSize(nodeOrArray) {
 // But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
 // when we enter the doc node.
 function firstChanged(n, initialPos, depth = 0) {
-  const log = (str) => console.log("  ".repeat(depth) + str);
+  const log = (str) => {
+    // console.log("  ".repeat(depth) + str);
+  }
 
   log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
@@ -290,6 +297,24 @@ function firstChanged(n, initialPos, depth = 0) {
   return pos;
 }
 
+// Find the node that immediately precedes a given resolved position.
+function findPrecedingNode(rpos) {
+  if (rpos.nodeBefore) return rpos.nodeBefore; // No search necessary.
+
+  // Walk up the tree, looking for a preceding sibling at each level.
+  for (let depth = rpos.depth; depth >= 0; depth--) {
+    const idx = rpos.index(depth);
+
+    // Is there a preceding sibling at this level?
+    if (idx > 0) {
+      const parent = depth > 0 ? rpos.node(depth - 1) : rpos.doc;
+      return parent.child(idx - 1);
+    }
+  }
+
+  return null;
+}
+
 function changedSlice(doc) {
   let startPos = firstChanged(doc, -1);
   let endPos = -1;
@@ -303,7 +328,7 @@ function changedSlice(doc) {
       const { minGenId, genId } = checkNotNull(nodeInfo.get(node));
 
       // This condition is a bit tricky. Ideally we want the lowest position that
-      // fully encompasses the changed. If we find the first leaf node that is reused,
+      // fully encompasses the change. If we find the first leaf node that is reused,
       // we can subtract at least 1 (returning to the parent), and we can keep subtracting
       // 1 as long as long as that would take us up to the parent.
       // But, it's unclear whether that is required, or whether ProseMirror will handle
@@ -319,6 +344,23 @@ function changedSlice(doc) {
   return { startPos, endPos };
 }
 
+function oldPos(node, prevParent) {
+  // Walk the parent chain and determine the position the given node had in the old doc.
+  let pos = 0;
+  while (prevParent) {
+    assert(checkNotNull(nodeInfo.get(prevParent)).genId < currGenId);
+    pos += 1; // +1 to account for entering the current node.
+    for (const c of prevParent.children) {
+      if (c === node) {
+        return pos;
+      }
+      pos += c.nodeSize;
+    }
+    prevParent = parentInfo.get(prevParent)?.at(-1);
+  }
+  return -1;
+}
+
 let m = g.matcher();
 const makeEdit = (startIdx, endIdx, str) => {
   m.replaceInputRange(startIdx, endIdx, str);
@@ -326,8 +368,8 @@ const makeEdit = (startIdx, endIdx, str) => {
   return semantics(m.match());
 };
 
-let root = makeEdit(0, 0, "= Title\n\nHello world\n\nx");
-console.log(root.ast);
+let root = makeEdit(0, 0, "= Title\n\nHello world\n\n!");
+// console.log(root.ast);
 console.log(root.pmNodes);
 
 const intoTr = (edits) =>
@@ -349,7 +391,7 @@ root = makeEdit(0, 0, "");
 console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
 // updateView();
-if (view)
+if (false && view)
   // This is the correct, minimal edit - replace `world` with `universe`.
   view.dispatch(
     view.state.tr.replaceRange(
@@ -363,21 +405,46 @@ if (view)
 let changedPos = firstChanged(root.pmNodes, -1);
 let changedNode = root.pmNodes.nodeAt(changedPos);
 
-// When we find the changed slice,
-const chSlice = changedSlice(root.pmNodes)
-assert.equal(`${changedNode}`, '"Hello universe"');
-assert.equal(chSlice.startPos, 16 - "Hello ".length);
-
 /*
   Positions *before* the indicated character:
 
-  doc(paragraph("= Title"), paragraph("Hello universe"), paragraph("x"))
+  doc(paragraph("= Title"), paragraph("Hello universe"), paragraph("!"))
       ^          ^          ^          ^     ^           ^          ^
       0          1          9          10    16          25         26
  */
 
-// The expected end is the
-assert.equal(chSlice.endPos, 25);
+const chSlice = changedSlice(root.pmNodes)
+assert.equal(`${changedNode}`, '"Hello universe"');
+assert.equal(chSlice.startPos, 16 - "Hello ".length);
+assert.equal(chSlice.endPos, 25); // Arguably could be 24 too.
+
+const firstReused = root.pmNodes.nodeAt(chSlice.endPos);
+const parents = checkNotNull(parentInfo.get(firstReused));
+
+// Most recent parent must be from the current generation, and the previous parent
+// from a previous generation.
+assert.equal(checkNotNull(nodeInfo.get(parents.at(-1))).genId, currGenId);
+let prevParent = parents.at(-2);
+assert(checkNotNull(nodeInfo.get(prevParent)).genId < currGenId);
+
+console.log(`${root.pmNodes}`);
+console.log(root.pmNodes.resolve(chSlice.startPos));
+
+const lastReusedNode = findPrecedingNode(root.pmNodes.resolve(chSlice.startPos));
+const lrnPrevParent = parentInfo.get(lastReusedNode)?.at(-2);
+assert(checkNotNull(nodeInfo.get(lrnPrevParent)).genId < currGenId);
+
+const editPos = {
+  from: oldPos(lastReusedNode, lrnPrevParent) + lastReusedNode.nodeSize,
+  to: oldPos(firstReused, prevParent) - 1
+};
+console.log('pos in old doc', editPos);
+const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
+const step = new ReplaceStep(editPos.from, editPos.to, slice);
+if (view) {
+  view.dispatch(view.state.tr.step(step));
+  console.log(view.state.doc.toString());
+}
 
 console.log("REAL EDIT #2 ----");
 root = makeEdit(0, 26, "");
