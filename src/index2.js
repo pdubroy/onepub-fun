@@ -80,82 +80,28 @@ function checkNotNull(val, msg) {
   return val;
 }
 
+// An attribute that helps us figure out which parts of the CST are totally new, partially new,
+// or totally reused.
 const semantics = g.createSemantics().addAttribute(
-  "ast",
-  (() => {
-    function handleNonterminal(...children) {
-      // const key = checkNotNull(id[this.ctorName]);
+  "genInfo",
+  {
+    _default(...children) {
       return {
-        // _node: this._node,
         type: this.ctorName,
         genId: currGenId,
-        minGenId: Math.min(...children.map((c) => c.ast.minGenId)),
-        // key,
-        children: children.map((c) => c.ast),
-        startIdx: this.source.startIdx,
-        endIdx: this.source.endIdx,
+        minGenId: Math.min(...children.map((c) => c.genInfo.minGenId)),
+      };
+    },
+    _iter(...children) {
+      // Because _iter actions aren't memoized (only non-terminal actions are), we don't want to get the new genId
+      // unless the children have changed.
+      const genId = Math.max(-1, ...children.map((c) => c.genInfo.genId));
+      return {
+        genId,
+        minGenId: Math.min(currGenId, ...children.map((c) => c.genInfo.minGenId)),
       };
     }
-
-    return {
-      _nonterminal: handleNonterminal,
-      _terminal() {
-        // console.log(this.ctorName, JSON.stringify(this.sourceString), `@${this.source.startIdx}`);
-        return {
-          value: this.sourceString,
-          minGenId: currGenId,
-          genId: currGenId,
-        };
-      },
-      _iter(...children) {
-        // console.log(this.ctorName, JSON.stringify(this.sourceString), `@${this.source.startIdx}`);
-
-        // Because _iter actions aren't memoized (only non-terminal actions are), we don't want to get the new genId
-        // unless the children have changed.
-        const genId = Math.max(-1, ...children.map((c) => c.ast.genId));
-        return {
-          // _node: this._node,
-          type: this.ctorName,
-          genId,
-          minGenId: Math.min(currGenId, ...children.map((c) => c.ast.minGenId)),
-          children: children.map((c) => c.ast),
-          startIdx: this.source.startIdx,
-          endIdx: this.source.endIdx,
-        };
-      },
-      line(iterAny) {
-        const key = checkNotNull(id[this.ctorName]);
-        return {
-          // _node: this._node,
-          type: this.ctorName,
-          genId: currGenId,
-          minGenId: currGenId,
-          key,
-          children: [this.sourceString],
-          startIdx: this.source.startIdx,
-          endIdx: this.source.endIdx,
-        };
-      },
-      document(iterNl, optHeader, body) {
-        console.log({ currGenId });
-        const ans = handleNonterminal.call(this, iterNl, optHeader, body);
-        ans.children[0].key = "i";
-        ans.children[1].key = "j";
-        return ans;
-      },
-      body(iterSectionBlock, optNl) {
-        const ans = handleNonterminal.call(this, iterSectionBlock, optNl);
-        ans.children[0].key = "k";
-        ans.children[1].key = "l";
-        return ans;
-      },
-      section_block(iterNl, para) {
-        const ans = handleNonterminal.call(this, iterNl, para);
-        ans.children[0].key = "m";
-        return ans;
-      },
-    };
-  })(),
+  }
 );
 
 let nodeInfo = new WeakMap();
@@ -169,8 +115,8 @@ function pmNode(ohmNode, nodeType, childrenOrContent) {
       ? schema.text(childrenOrContent)
       : schema.node(nodeType, null, childrenOrContent);
   nodeInfo.set(ans, {
-    genId: ohmNode.ast.genId,
-    minGenId: ohmNode.ast.minGenId,
+    genId: ohmNode.genInfo.genId,
+    minGenId: ohmNode.genInfo.minGenId,
   });
   if (Array.isArray(childrenOrContent)) {
     childrenOrContent.forEach((c) => {
@@ -234,7 +180,7 @@ semantics.addAttribute("pmNodes", {
 semantics.addOperation("pmEdit(offset, maxOffset)", {
   document(iterNl, optHeader, body) {
     const { offset, maxOffset } = this.args;
-    const { minGenId, genId } = this.ast;
+    const { minGenId, genId } = this.genInfo;
     console.log({ minGenId, currGenId });
     if (genId < currGenId) {
       console.log("doc hasn't changed");
@@ -369,7 +315,6 @@ const makeEdit = (startIdx, endIdx, str) => {
 };
 
 let root = makeEdit(0, 0, "= Title\n\nHello world\n\n!");
-// console.log(root.ast);
 console.log(root.pmNodes);
 
 const intoTr = (edits) =>
