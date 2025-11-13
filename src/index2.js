@@ -182,10 +182,15 @@ function pmNode(ohmNode, nodeType, childrenOrContent) {
 // Ideally we would walk the AST here, not the CST.
 semantics.addAttribute("pmNodes", {
   document(iterNl, optHeader, body) {
-    return pmNode(this, "doc", [
-      ...([optHeader.child(0)?.pmNodes] ?? []),
+    const children = [
+      ...(optHeader.children.length > 0 ? [optHeader.child(0).pmNodes] : []),
       ...body.pmNodes,
-    ]);
+    ];
+    // The ProseMirror basic schema requires at least one paragraph in the document.
+    if (children.length === 0) {
+      children.push(pmNode(this, "paragraph", []));
+    }
+    return pmNode(this, "doc", children);
   },
   header(title_content) {
     return pmNode(this, "paragraph", [
@@ -255,27 +260,34 @@ function pmSize(nodeOrArray) {
     : nodeOrArray.nodeSize;
 }
 
-function firstChanged(n, initialPos, depth=0) {
+// Per ProseMirror docs, "The start of the document, right before the first content, is position 0".
+// But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
+// when we enter the doc node.
+function firstChanged(n, initialPos, depth = 0) {
   const log = (str) => console.log("  ".repeat(depth) + str);
 
   log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
   const { genId, minGenId } = checkNotNull(nodeInfo.get(n));
-  log(`- type=${n.type}, genId=${genId}, minGenId=${minGenId}, currGenId=${currGenId}`);
+  log(
+    `- type=${n.type}, genId=${genId}, minGenId=${minGenId}, currGenId=${currGenId}`,
+  );
 
   if (genId < currGenId) return -1; // Nothing changed in this subtree.
 
   if (n.type.name === "text") return pos; // Found the first change!
 
   // Not a text node, and something changed in this subtree.
-  pos += 1; // Account for the opening of this node.
+  // pos += 1; // Account for the opening of this node.
 
   for (const child of n.children) {
-    const ans = firstChanged(child, pos, depth + 1);
+    // pos + 1 to account for the opening of _this_ node.
+    const ans = firstChanged(child, pos + 1, depth + 1);
     if (ans !== -1) return ans; // Found it!
     pos += child.nodeSize;
   }
-  return -1;
+  assert.equal(n.children.length, 0);
+  return pos;
 }
 
 // function changedSlice(nodes) {
@@ -331,9 +343,8 @@ console.log("FAKE EDIT ----");
 root = makeEdit(0, 0, "");
 // updateView();
 
-console.log("REAL EDIT ----");
+console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
-// console.log(changedSlice([root]));
 // updateView();
 if (view)
   // This is the correct edit - replace `world` with `universe`.
@@ -346,7 +357,18 @@ if (view)
   );
 
 // We should find the position just before the "Hello universe" text node.
-const pos = firstChanged(root.pmNodes, -1);
-const n = root.pmNodes.nodeAt(pos);
-assert.equal(n.type.name, 'text');
-assert.equal(n.text, "Hello universe");
+let changedPos = firstChanged(root.pmNodes, -1);
+let changedNode = root.pmNodes.nodeAt(changedPos);
+assert.equal(`${changedNode}`, '"Hello universe"');
+
+console.log("REAL EDIT #2 ----");
+root = makeEdit(0, 23, "");
+// updateView();
+if (view)
+  // This is the correct edit - replace the whole text.
+  view.dispatch(view.state.tr.replaceRange(0, 25, Slice.empty));
+
+// We should find the position just before the "Hello universe" text node.
+changedPos = firstChanged(root.pmNodes, -1);
+changedNode = root.pmNodes.nodeAt(0);
+assert.equal(`${changedNode}`, "paragraph");
