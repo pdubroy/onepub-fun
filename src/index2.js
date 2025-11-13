@@ -270,7 +270,7 @@ function firstChanged(n, initialPos, depth = 0) {
   let pos = initialPos;
   const { genId, minGenId } = checkNotNull(nodeInfo.get(n));
   log(
-    `- type=${n.type}, genId=${genId}, minGenId=${minGenId}, currGenId=${currGenId}`,
+    `- type=${n.type.name}, genId=${genId}, minGenId=${minGenId}, currGenId=${currGenId}`,
   );
 
   if (genId < currGenId) return -1; // Nothing changed in this subtree.
@@ -290,31 +290,34 @@ function firstChanged(n, initialPos, depth = 0) {
   return pos;
 }
 
-// function changedSlice(nodes) {
-//   let startPos = -1;
-//   let endPos = -1;
+function changedSlice(doc) {
+  let startPos = firstChanged(doc, -1);
+  let endPos = -1;
 
-//   // Note: We shouldn't be walking the CST here, but the pmNodes tree.
-//   // But, since they map 1-to-1 right now, this is fine.
-//   function walk(nodes, pos) {
-//     for (const n of nodes) {
-//       if (n.ctorName === "_terminal") {
-//         if (startPos === -1 && n.ast.genId === currGenId) {
-//           startPos = pos;
-//         } else if (startPos > -1 && n.ast.genId !== currGenId) {
-//           endPos = pos;
-//           return true; // Done
-//         }
-//       } else if (walk(n.children, pos + 1)) {
-//         break;
-//       }
-//       offset += pmSize(n.pmNodes);
-//     }
-//     return startPos !== -1 && endPos
-//   }
+  if (startPos !== -1) {
+    // TODO: Find a better way to do this. This will keep walking the children of any internal
+    // nodes on the path to the first reused node. But, the code is simpler for now.
+    doc.nodesBetween(startPos, doc.content.size, (node, pos) => {
+      if (endPos !== -1) return false; // already found, stop recursing into any nodes.
 
-//   return walk(nodes, 0);
-// }
+      const { minGenId, genId } = checkNotNull(nodeInfo.get(node));
+
+      // This condition is a bit tricky. Ideally we want the lowest position that
+      // fully encompasses the changed. If we find the first leaf node that is reused,
+      // we can subtract at least 1 (returning to the parent), and we can keep subtracting
+      // 1 as long as long as that would take us up to the parent.
+      // But, it's unclear whether that is required, or whether ProseMirror will handle
+      // the stitching automatically.
+
+      // There is a reused node in here.
+      if (minGenId !== currGenId && node.type.name === "text") {
+        endPos = pos - 1; // Found it!
+      }
+    });
+    if (endPos === -1) endPos = doc.content.size;
+  }
+  return { startPos, endPos };
+}
 
 let m = g.matcher();
 const makeEdit = (startIdx, endIdx, str) => {
@@ -323,7 +326,7 @@ const makeEdit = (startIdx, endIdx, str) => {
   return semantics(m.match());
 };
 
-let root = makeEdit(0, 0, "= Title\n\nHello world");
+let root = makeEdit(0, 0, "= Title\n\nHello world\n\nx");
 console.log(root.ast);
 console.log(root.pmNodes);
 
@@ -347,7 +350,7 @@ console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
 // updateView();
 if (view)
-  // This is the correct edit - replace `world` with `universe`.
+  // This is the correct, minimal edit - replace `world` with `universe`.
   view.dispatch(
     view.state.tr.replaceRange(
       16,
@@ -359,14 +362,29 @@ if (view)
 // We should find the position just before the "Hello universe" text node.
 let changedPos = firstChanged(root.pmNodes, -1);
 let changedNode = root.pmNodes.nodeAt(changedPos);
+
+// When we find the changed slice,
+const chSlice = changedSlice(root.pmNodes)
 assert.equal(`${changedNode}`, '"Hello universe"');
+assert.equal(chSlice.startPos, 16 - "Hello ".length);
+
+/*
+  Positions *before* the indicated character:
+
+  doc(paragraph("= Title"), paragraph("Hello universe"), paragraph("x"))
+      ^          ^          ^          ^     ^           ^          ^
+      0          1          9          10    16          25         26
+ */
+
+// The expected end is the
+assert.equal(chSlice.endPos, 25);
 
 console.log("REAL EDIT #2 ----");
-root = makeEdit(0, 23, "");
+root = makeEdit(0, 26, "");
 // updateView();
 if (view)
   // This is the correct edit - replace the whole text.
-  view.dispatch(view.state.tr.replaceRange(0, 25, Slice.empty));
+  view.dispatch(view.state.tr.replaceRange(0, root.pmNodes.content.size, Slice.empty));
 
 // We should find the position just before the "Hello universe" text node.
 changedPos = firstChanged(root.pmNodes, -1);
