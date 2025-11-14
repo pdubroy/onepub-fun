@@ -9,6 +9,13 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
+const DeletionType = {
+  MANUAL: 0,
+  TRACING: 1,
+  REF_COUNTING: 2,
+};
+const deletionType = DeletionType.REF_COUNTING;
+
 function assert(cond, message) {
   if (!cond) throw new Error(message || "Assertion failed");
 }
@@ -82,30 +89,28 @@ function checkNotNull(val, msg) {
 
 // An attribute that helps us figure out which parts of the CST are totally new, partially new,
 // or totally reused.
-const semantics = g.createSemantics().addAttribute(
-  "genInfo",
-  {
-    _default(...children) {
-      return {
-        type: this.ctorName,
-        genId: currGenId,
-        minGenId: Math.min(...children.map((c) => c.genInfo.minGenId)),
-      };
-    },
-    _iter(...children) {
-      // Because _iter actions aren't memoized (only non-terminal actions are), we don't want to get the new genId
-      // unless the children have changed.
-      const genId = Math.max(-1, ...children.map((c) => c.genInfo.genId));
-      return {
-        genId,
-        minGenId: Math.min(currGenId, ...children.map((c) => c.genInfo.minGenId)),
-      };
-    }
-  }
-);
+const semantics = g.createSemantics().addAttribute("genInfo", {
+  _default(...children) {
+    return {
+      type: this.ctorName,
+      genId: currGenId,
+      minGenId: Math.min(...children.map((c) => c.genInfo.minGenId)),
+    };
+  },
+  _iter(...children) {
+    // Because _iter actions aren't memoized (only non-terminal actions are), we don't want to get the new genId
+    // unless the children have changed.
+    const genId = Math.max(-1, ...children.map((c) => c.genInfo.genId));
+    return {
+      genId,
+      minGenId: Math.min(currGenId, ...children.map((c) => c.genInfo.minGenId)),
+    };
+  },
+});
 
 let nodeInfo = new WeakMap();
 let parentInfo = new WeakMap();
+let refCounts = new WeakMap();
 
 // Helper to create a ProseMirror node, and store generation info and parent info
 // in the WeakMaps.
@@ -118,14 +123,23 @@ function pmNode(ohmNode, nodeType, childrenOrContent) {
     genId: ohmNode.genInfo.genId,
     minGenId: ohmNode.genInfo.minGenId,
   });
-  if (Array.isArray(childrenOrContent)) {
-    childrenOrContent.forEach((c) => {
-      // We maintain a list of all observed parents of a given node.
-      const arr = parentInfo.get(c) || [];
-      arr.push(ans);
-      parentInfo.set(c, arr);
-    });
-  }
+  if (nodeType === "text") return ans;
+
+  const children = Array.isArray(childrenOrContent)
+    ? childrenOrContent
+    : [childrenOrContent];
+  children.forEach((c) => {
+    refCounts.set(c, (refCounts.get(c) ?? 0) + 1);
+  });
+
+  // if (Array.isArray(childrenOrContent)) {
+  //   childrenOrContent.forEach((c) => {
+  //     // We maintain a list of all observed parents of a given node.
+  //     const arr = parentInfo.get(c) || [];
+  //     arr.push(ans);
+  //     parentInfo.set(c, arr);
+  //   });
+  // }
   return ans;
 }
 
@@ -217,7 +231,7 @@ function pmSize(nodeOrArray) {
 function firstChanged(n, initialPos, depth = 0) {
   const log = (str) => {
     // console.log("  ".repeat(depth) + str);
-  }
+  };
 
   log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
@@ -307,15 +321,20 @@ function oldPos(node, prevParent) {
   return -1;
 }
 
+let docs = [];
+
 let m = g.matcher();
 const makeEdit = (startIdx, endIdx, str) => {
   m.replaceInputRange(startIdx, endIdx, str);
   currGenId += 1;
-  return semantics(m.match());
+  const ans = semantics(m.match());
+  docs.push(ans.pmNodes); // Whenever we make an edit, record the doc.
+  refCounts.set(ans.pmNodes, 1); // Top-level doc always has ref count 1.
+  return ans;
 };
 
 let root = makeEdit(0, 0, "= Title\n\nHello world\n\n!");
-console.log(root.pmNodes);
+console.log(`${docs.at(-1)}`);
 
 const intoTr = (edits) =>
   edits.reduce((tr, step) => {
@@ -336,7 +355,7 @@ root = makeEdit(0, 0, "");
 console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
 // updateView();
-if (false && view)
+if (view && deletionType === DeletionType.MANUAL)
   // This is the correct, minimal edit - replace `world` with `universe`.
   view.dispatch(
     view.state.tr.replaceRange(
@@ -358,47 +377,97 @@ let changedNode = root.pmNodes.nodeAt(changedPos);
       0          1          9          10    16          25         26
  */
 
-const chSlice = changedSlice(root.pmNodes)
+const chSlice = changedSlice(root.pmNodes);
 assert.equal(`${changedNode}`, '"Hello universe"');
 assert.equal(chSlice.startPos, 16 - "Hello ".length);
 assert.equal(chSlice.endPos, 25); // Arguably could be 24 too.
 
-const firstReused = root.pmNodes.nodeAt(chSlice.endPos);
-const parents = checkNotNull(parentInfo.get(firstReused));
+if (deletionType === DeletionType.TRACING) {
+  const firstReused = root.pmNodes.nodeAt(chSlice.endPos);
+  const parents = checkNotNull(parentInfo.get(firstReused));
 
-// Most recent parent must be from the current generation, and the previous parent
-// from a previous generation.
-assert.equal(checkNotNull(nodeInfo.get(parents.at(-1))).genId, currGenId);
-let prevParent = parents.at(-2);
-assert(checkNotNull(nodeInfo.get(prevParent)).genId < currGenId);
+  // Most recent parent must be from the current generation, and the previous parent
+  // from a previous generation.
+  assert.equal(checkNotNull(nodeInfo.get(parents.at(-1))).genId, currGenId);
+  let prevParent = parents.at(-2);
+  assert(checkNotNull(nodeInfo.get(prevParent)).genId < currGenId);
 
-console.log(`${root.pmNodes}`);
-console.log(root.pmNodes.resolve(chSlice.startPos));
+  console.log(`${root.pmNodes}`);
+  console.log(root.pmNodes.resolve(chSlice.startPos));
 
-const lastReusedNode = findPrecedingNode(root.pmNodes.resolve(chSlice.startPos));
-const lrnPrevParent = parentInfo.get(lastReusedNode)?.at(-2);
-assert(checkNotNull(nodeInfo.get(lrnPrevParent)).genId < currGenId);
+  const lastReusedNode = findPrecedingNode(
+    root.pmNodes.resolve(chSlice.startPos),
+  );
+  const lrnPrevParent = parentInfo.get(lastReusedNode)?.at(-2);
+  assert(checkNotNull(nodeInfo.get(lrnPrevParent)).genId < currGenId);
 
-const editPos = {
-  from: oldPos(lastReusedNode, lrnPrevParent) + lastReusedNode.nodeSize,
-  to: oldPos(firstReused, prevParent) - 1
-};
-console.log('pos in old doc', editPos);
-const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
-const step = new ReplaceStep(editPos.from, editPos.to, slice);
-if (view) {
-  view.dispatch(view.state.tr.step(step));
-  console.log(view.state.doc.toString());
+  const editPos = {
+    from: oldPos(lastReusedNode, lrnPrevParent) + lastReusedNode.nodeSize,
+    to: oldPos(firstReused, prevParent) - 1,
+  };
+  console.log("pos in old doc", editPos);
+  const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
+  const step = new ReplaceStep(editPos.from, editPos.to, slice);
+  if (view) {
+    view.dispatch(view.state.tr.step(step));
+  }
+} else if (deletionType === DeletionType.REF_COUNTING) {
+  const oldDoc = docs.at(-2);
+
+  const nonDeletions = [];
+
+  // Decrement the ref count of the given node, and determine the extents
+  // of any nodes that are no longer referenced.
+  function detach(node, pos, depth = 0) {
+    const log = (str) => {
+      console.log("  ".repeat(depth) + str);
+    };
+    log(`[${node.type.name}] ${node} @ ${pos}`);
+    const newCount = checkNotNull(refCounts.get(node)) - 1;
+    if (newCount === 0) {
+      // It's not strictly necessary to remove the item from the map, since it should
+      // be GC'd anyway. But it doesn't hurt.
+      refCounts.delete(node);
+
+      if (node.type.name === "text") {
+        return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
+      }
+      return node.children.flatMap((c) => {
+        const ans = detach(c, pos + 1, depth + 1);
+        pos += c.nodeSize;
+        return ans;
+      });
+    }
+    refCounts.set(node, newCount);
+    return []; // Nothing is dead.
+  }
+  const dead = detach(oldDoc, -1);
+  assert(dead.length === 1);
+
+  if (view) {
+    const [from, to] = dead[0];
+    const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
+    // Not sure the best way to make sure that the open depths are correct.
+    // Randomly adding a +1 here fixed it.
+    const step = new ReplaceStep(from, to + 1, slice);
+    if (view) {
+      view.dispatch(view.state.tr.step(step));
+    }
+  }
 }
 
+/*
 console.log("REAL EDIT #2 ----");
 root = makeEdit(0, 26, "");
 // updateView();
 if (view)
   // This is the correct edit - replace the whole text.
-  view.dispatch(view.state.tr.replaceRange(0, root.pmNodes.content.size, Slice.empty));
+  view.dispatch(
+    view.state.tr.replaceRange(0, root.pmNodes.content.size, Slice.empty),
+  );
 
 // We should find the position just before the "Hello universe" text node.
 changedPos = firstChanged(root.pmNodes, -1);
 changedNode = root.pmNodes.nodeAt(0);
 assert.equal(`${changedNode}`, "paragraph");
+*/
