@@ -9,6 +9,8 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
+import { DocumentState } from "./pmNodes.ts";
+
 const DeletionType = {
   MANUAL: 0,
   REF_COUNTING: 2,
@@ -68,7 +70,7 @@ const g = ohm.grammar(String.raw`
     nl = "\n"
   }`);
 
-let currGenId = 0;
+const docState = new DocumentState();
 
 const id = {
   document: "a",
@@ -88,39 +90,7 @@ function checkNotNull(val, msg) {
 
 const semantics = g.createSemantics();
 
-let genInfo = new WeakMap();
-
 const checkedGet = (map, key) => checkNotNull(map.get(key));
-
-// Helper to create a ProseMirror node, and store generation info and parent info
-// in the WeakMaps.
-function pmNode(nodeType, children) {
-  assert(nodeType !== "text" || children.length === 1);
-  const ans =
-    nodeType === "text"
-      ? schema.text(children[0])
-      : schema.node(nodeType, null, children);
-  const genId = currGenId;
-
-  // It's not clear we actually need minGenId for anything!
-  // I think it may just be that the current way of generating a ReplaceStep doesn't handle the
-  // boundary case correctly.
-  let minGenId = currGenId;
-
-  if (nodeType !== "text") {
-    children.forEach((c) => {
-      checkedGet(genInfo, c).parentGenId = genId;
-    });
-    minGenId = Math.min(...children.map((c) => checkedGet(genInfo, c).genId));
-  }
-  genInfo.set(ans, {
-    genId,
-    minGenId,
-    parentGenId: genId, // Only the root node won't have this overridden.
-  });
-
-  return ans;
-}
 
 // pmNodes represents the ProseMirror representation of the parse tree.
 // Ideally we would walk the AST here, not the CST.
@@ -134,10 +104,13 @@ semantics.addAttribute("pmNodes", {
     if (children.length === 0) {
       children.push(pmNode("paragraph", []));
     }
-    return pmNode("doc", children);
+    return docState.pmNode("doc", children);
   },
   header(title_content) {
-    return pmNode("paragraph", [pmNode("text", [title_content.sourceString])]);
+    return docState.pmNode(
+      "paragraph",
+      [docState.pmNode("text", title_content.sourceString)],
+    );
   },
   body(iterSectionBlock, optNl) {
     // No gen info, b/c there's no associated pmNode.
@@ -148,16 +121,16 @@ semantics.addAttribute("pmNodes", {
     return para.pmNodes;
   },
   paragraph(line) {
-    return pmNode("paragraph", [line.pmNodes]);
+    return docState.pmNode("paragraph", [line.pmNodes]);
   },
   line(iterAny) {
-    return pmNode("text", [this.sourceString]);
+    return docState.pmNode("text", this.sourceString);
   },
   _default(...children) {
     return children.flatMap((c) => c.pmNodes);
   },
   _terminal() {
-    return pmNode("text", [this.sourceString]);
+    return docState.pmNode("text", this.sourceString);
   },
 });
 
@@ -171,11 +144,11 @@ semantics.addAttribute("pmNodes", {
 semantics.addOperation("pmEdit(offset, maxOffset)", {
   document(iterNl, optHeader, body) {
     const { offset, maxOffset } = this.args;
-    const { minGenId, genId } = checkedGet(genInfo, this.pmNodes);
-    if (genId < currGenId) {
+    const { minGenId, genId } = docState.getGenInfo(this.pmNodes);
+    if (genId < docState.currGenId) {
       console.log("doc hasn't changed");
       return [];
-    } else if (minGenId === currGenId) {
+    } else if (minGenId === docState.currGenId) {
       const doc = this.pmNodes;
       return [
         new ReplaceStep(offset, maxOffset, doc.slice(0, doc.content.size)),
@@ -198,15 +171,15 @@ semantics.addOperation("pmEdit(offset, maxOffset)", {
 // when we enter the doc node.
 function firstChanged(n, initialPos, depth = 0) {
   const log = (str) => {
-    // console.log("  ".repeat(depth) + str);
+    console.log("  ".repeat(depth) + str);
   };
 
   log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
-  const { genId } = checkNotNull(genInfo.get(n));
-  log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
+  const { genId } = docState.getGenInfo(n);
+  log(`- type=${n.type.name}, genId=${genId}, currGenId=${docState.currGenId}`);
 
-  if (genId < currGenId) return -1; // Nothing changed in this subtree.
+  if (genId < docState.currGenId) return -1; // Nothing changed in this subtree.
 
   if (n.type.name === "text") return pos; // Found the first change!
 
@@ -249,7 +222,7 @@ function changedSlice(doc) {
     doc.nodesBetween(startPos, doc.content.size, (node, pos) => {
       if (endPos !== -1) return false; // already found, stop recursing into any nodes.
 
-      const { genId } = checkNotNull(genInfo.get(node));
+      const { genId } = docState.getGenInfo(node);
 
       // This condition is a bit tricky. Ideally we want the lowest position that
       // fully encompasses the change. If we find the first leaf node that is reused,
@@ -259,7 +232,7 @@ function changedSlice(doc) {
       // the stitching automatically.
 
       // There is a reused node in here.
-      if (genId !== currGenId && node.type.name === "text") {
+      if (genId !== docState.currGenId && node.type.name === "text") {
         endPos = pos - 1; // Found it!
       }
     });
@@ -273,7 +246,7 @@ let docs = [];
 let m = g.matcher();
 const makeEdit = (startIdx, endIdx, str) => {
   m.replaceInputRange(startIdx, endIdx, str);
-  currGenId += 1;
+  docState.currGenId += 1;
   const ans = semantics(m.match());
   docs.push(ans.pmNodes); // Whenever we make an edit, record the doc.
   return ans;
@@ -338,8 +311,8 @@ if (deletionType === DeletionType.REF_COUNTING) {
       console.log("  ".repeat(depth) + str);
     };
     log(`[${node.type.name}] ${node} @ ${pos}`);
-    const { parentGenId } = checkedGet(genInfo, node);
-    if (parentGenId < currGenId) {
+    const { parentGenId } = docState.getGenInfo(node);
+    if (parentGenId < docState.currGenId) {
       if (node.type.name === "text") {
         return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
       }
