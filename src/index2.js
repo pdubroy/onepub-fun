@@ -89,34 +89,34 @@ function checkNotNull(val, msg) {
 const semantics = g.createSemantics();
 
 let genInfo = new WeakMap();
-let refCounts = new WeakMap();
 
 const checkedGet = (map, key) => checkNotNull(map.get(key));
 
 // Helper to create a ProseMirror node, and store generation info and parent info
 // in the WeakMaps.
-function pmNode(nodeType, childrenOrContent) {
+function pmNode(nodeType, children) {
+  assert(nodeType !== "text" || children.length === 1);
   const ans =
     nodeType === "text"
-      ? schema.text(childrenOrContent)
-      : schema.node(nodeType, null, childrenOrContent);
+      ? schema.text(children[0])
+      : schema.node(nodeType, null, children);
   const genId = currGenId;
 
   // It's not clear we actually need minGenId for anything!
+  // I think it may just be that the current way of generating a ReplaceStep doesn't handle the
+  // boundary case correctly.
   let minGenId = currGenId;
 
   if (nodeType !== "text") {
-    const children = Array.isArray(childrenOrContent)
-      ? childrenOrContent
-      : [childrenOrContent];
     children.forEach((c) => {
-      refCounts.set(c, (refCounts.get(c) ?? 0) + 1);
+      checkedGet(genInfo, c).parentGenId = genId;
     });
     minGenId = Math.min(...children.map((c) => checkedGet(genInfo, c).genId));
   }
   genInfo.set(ans, {
     genId,
     minGenId,
+    parentGenId: genId // Only the root node won't have this overridden.
   });
 
   return ans;
@@ -138,7 +138,7 @@ semantics.addAttribute("pmNodes", {
   },
   header(title_content) {
     return pmNode("paragraph", [
-      pmNode( "text", title_content.sourceString),
+      pmNode( "text", [title_content.sourceString]),
     ]);
   },
   body(iterSectionBlock, optNl) {
@@ -150,16 +150,16 @@ semantics.addAttribute("pmNodes", {
     return para.pmNodes;
   },
   paragraph(line) {
-    return pmNode( "paragraph", line.pmNodes);
+    return pmNode( "paragraph", [line.pmNodes]);
   },
   line(iterAny) {
-    return pmNode( "text", this.sourceString);
+    return pmNode( "text", [this.sourceString]);
   },
   _default(...children) {
     return children.flatMap((c) => c.pmNodes);
   },
   _terminal() {
-    return pmNode( "text", this.sourceString);
+    return pmNode( "text", [this.sourceString]);
   },
 });
 
@@ -280,7 +280,6 @@ const makeEdit = (startIdx, endIdx, str) => {
   currGenId += 1;
   const ans = semantics(m.match());
   docs.push(ans.pmNodes); // Whenever we make an edit, record the doc.
-  refCounts.set(ans.pmNodes, 1); // Top-level doc always has ref count 1.
   return ans;
 };
 
@@ -345,12 +344,8 @@ if (deletionType === DeletionType.REF_COUNTING) {
       console.log("  ".repeat(depth) + str);
     };
     log(`[${node.type.name}] ${node} @ ${pos}`);
-    const newCount = checkNotNull(refCounts.get(node)) - 1;
-    if (newCount === 0) {
-      // It's not strictly necessary to remove the item from the map, since it should
-      // be GC'd anyway. But it doesn't hurt.
-      refCounts.delete(node);
-
+    const { parentGenId } = checkedGet(genInfo, node);
+    if (parentGenId < currGenId) {
       if (node.type.name === "text") {
         return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
       }
@@ -360,7 +355,6 @@ if (deletionType === DeletionType.REF_COUNTING) {
         return ans;
       });
     }
-    refCounts.set(node, newCount);
     return []; // Nothing is dead.
   }
   const dead = detach(oldDoc, -1);
