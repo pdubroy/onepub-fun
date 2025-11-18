@@ -9,7 +9,7 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
-import { DocumentState } from "./pmNodes.ts";
+import { NodeFactory, firstChangedPos } from "./pmNodes.ts";
 
 const DeletionType = {
   MANUAL: 0,
@@ -70,7 +70,7 @@ const g = ohm.grammar(String.raw`
     nl = "\n"
   }`);
 
-const docState = new DocumentState();
+const pmNodes = new NodeFactory();
 
 const id = {
   document: "a",
@@ -102,14 +102,14 @@ semantics.addAttribute("pmNodes", {
     ];
     // The ProseMirror basic schema requires at least one paragraph in the document.
     if (children.length === 0) {
-      children.push(pmNode("paragraph", []));
+      children.push(create("paragraph", []));
     }
-    return docState.pmNode("doc", children);
+    return pmNodes.create("doc", children);
   },
   header(title_content) {
-    return docState.pmNode(
+    return pmNodes.create(
       "paragraph",
-      [docState.pmNode("text", title_content.sourceString)],
+      [pmNodes.create("text", title_content.sourceString)],
     );
   },
   body(iterSectionBlock, optNl) {
@@ -121,16 +121,16 @@ semantics.addAttribute("pmNodes", {
     return para.pmNodes;
   },
   paragraph(line) {
-    return docState.pmNode("paragraph", [line.pmNodes]);
+    return pmNodes.create("paragraph", [line.pmNodes]);
   },
   line(iterAny) {
-    return docState.pmNode("text", this.sourceString);
+    return pmNodes.create("text", this.sourceString);
   },
   _default(...children) {
     return children.flatMap((c) => c.pmNodes);
   },
   _terminal() {
-    return docState.pmNode("text", this.sourceString);
+    return pmNodes.create("text", this.sourceString);
   },
 });
 
@@ -144,20 +144,20 @@ semantics.addAttribute("pmNodes", {
 semantics.addOperation("pmEdit(offset, maxOffset)", {
   document(iterNl, optHeader, body) {
     const { offset, maxOffset } = this.args;
-    const { minGenId, genId } = docState.getGenInfo(this.pmNodes);
-    if (genId < docState.currGenId) {
+    const { minGenId, genId } = pmNodes.getGenInfo(this.pmNodes);
+    if (genId < pmNodes.currGenId) {
       console.log("doc hasn't changed");
       return [];
-    } else if (minGenId === docState.currGenId) {
+    } else if (minGenId === pmNodes.currGenId) {
       const doc = this.pmNodes;
       return [
         new ReplaceStep(offset, maxOffset, doc.slice(0, doc.content.size)),
       ];
     } else {
-      console.log("doc is partially changed");
-      const fc = firstChanged(this.pmNodes, 0);
-      console.log("first changed", fc.node, fc.offset);
-      return [];
+      // console.log("doc is partially changed");
+      // const fc = firstChangedPos(this.pmNodes, 0);
+      // console.log("first changed", fc.node, fc.offset);
+      // return [];
     }
   },
   _default(...children) {
@@ -165,34 +165,6 @@ semantics.addOperation("pmEdit(offset, maxOffset)", {
     return children.flatMap((c) => c.pmEdit(offset, maxOffset));
   },
 });
-
-// Per ProseMirror docs, "The start of the document, right before the first content, is position 0".
-// But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
-// when we enter the doc node.
-function firstChanged(n, initialPos, depth = 0) {
-  const log = (str) => {
-    console.log("  ".repeat(depth) + str);
-  };
-
-  log(`firstChanged(${n}, ${initialPos}, ${depth})`);
-  let pos = initialPos;
-  const { genId } = docState.getGenInfo(n);
-  log(`- type=${n.type.name}, genId=${genId}, currGenId=${docState.currGenId}`);
-
-  if (genId < docState.currGenId) return -1; // Nothing changed in this subtree.
-
-  if (n.type.name === "text") return pos; // Found the first change!
-
-  // Not a text node, and something changed in this subtree.
-  for (const child of n.children) {
-    // pos + 1 to account for the opening of _this_ node.
-    const ans = firstChanged(child, pos + 1, depth + 1);
-    if (ans !== -1) return ans; // Found it!
-    pos += child.nodeSize;
-  }
-  assert.equal(n.children.length, 0);
-  return pos;
-}
 
 // Find the node that immediately precedes a given resolved position.
 function findPrecedingNode(rpos) {
@@ -213,7 +185,7 @@ function findPrecedingNode(rpos) {
 }
 
 function changedSlice(doc) {
-  let startPos = firstChanged(doc, -1);
+  let startPos = firstChangedPos(pmNodes, doc);
   let endPos = -1;
 
   if (startPos !== -1) {
@@ -222,7 +194,7 @@ function changedSlice(doc) {
     doc.nodesBetween(startPos, doc.content.size, (node, pos) => {
       if (endPos !== -1) return false; // already found, stop recursing into any nodes.
 
-      const { genId } = docState.getGenInfo(node);
+      const { genId } = pmNodes.getGenInfo(node);
 
       // This condition is a bit tricky. Ideally we want the lowest position that
       // fully encompasses the change. If we find the first leaf node that is reused,
@@ -232,7 +204,7 @@ function changedSlice(doc) {
       // the stitching automatically.
 
       // There is a reused node in here.
-      if (genId !== docState.currGenId && node.type.name === "text") {
+      if (genId !== pmNodes.currGenId && node.type.name === "text") {
         endPos = pos - 1; // Found it!
       }
     });
@@ -246,7 +218,7 @@ let docs = [];
 let m = g.matcher();
 const makeEdit = (startIdx, endIdx, str) => {
   m.replaceInputRange(startIdx, endIdx, str);
-  docState.currGenId += 1;
+  pmNodes.currGenId += 1;
   const ans = semantics(m.match());
   docs.push(ans.pmNodes); // Whenever we make an edit, record the doc.
   return ans;
@@ -285,7 +257,7 @@ if (view && deletionType === DeletionType.MANUAL)
   );
 
 // We should find the position just before the "Hello universe" text node.
-let changedPos = firstChanged(root.pmNodes, -1);
+let changedPos = firstChangedPos(pmNodes, root.pmNodes);
 let changedNode = root.pmNodes.nodeAt(changedPos);
 
 /*
@@ -311,8 +283,8 @@ if (deletionType === DeletionType.REF_COUNTING) {
       console.log("  ".repeat(depth) + str);
     };
     log(`[${node.type.name}] ${node} @ ${pos}`);
-    const { parentGenId } = docState.getGenInfo(node);
-    if (parentGenId < docState.currGenId) {
+    const { parentGenId } = pmNodes.getGenInfo(node);
+    if (parentGenId < pmNodes.currGenId) {
       if (node.type.name === "text") {
         return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
       }

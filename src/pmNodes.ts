@@ -28,7 +28,8 @@ const genInfo = (
   parentGenId: number,
 ): GenInfo => ({ genId, minGenId, parentGenId });
 
-export class DocumentState {
+// Constructs ProseMirror nodes, and keeps track of what generation they belong to.
+export class NodeFactory {
   currGenId: number = 0;
   #genInfo: WeakMap<Node, GenInfo> = new WeakMap();
 
@@ -40,7 +41,7 @@ export class DocumentState {
     this.#genInfo.set(key, value);
   }
 
-  pmNode(
+  create(
     nodeType: string,
     textOrChildren: Node[] | string,
   ): ReturnType<typeof schema.node> {
@@ -60,11 +61,19 @@ export class DocumentState {
     let minGenId = this.currGenId;
 
     if (nodeType !== "text") {
-      ans.children.forEach((c) => {
+      assert(Array.isArray(textOrChildren));
+      textOrChildren.forEach((c) =>
+        console.log(`child: ${c}, in map? ${this.#genInfo.has(c)}`),
+      );
+      ans.children.forEach((c, i) => {
+        console.log(`-> ${c}, in map? ${this.#genInfo.has(c)}`);
+        if (!this.#genInfo.has(c))
+          throw new Error(`child ${i} (${c}) missing genInfo`);
         this.getGenInfo(c).parentGenId = genId;
       });
       minGenId = Math.min(...ans.children.map((c) => this.getGenInfo(c).genId));
     }
+    console.log(`setting geninfo for ${ans}`);
     this.setGenInfo(ans, {
       genId,
       minGenId,
@@ -73,4 +82,40 @@ export class DocumentState {
 
     return ans;
   }
+}
+
+// Return a ProseMirror document position that represents the boundary between the
+// old and new content in the doc — where "old" and "new" are defined by the generation
+// IDs tracked by the NodeFactory.
+export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
+  function firstChangedImpl(n: Node, initialPos = -1, depth = 0) {
+    const log = (str: string) => {
+      // console.log("  ".repeat(depth) + str);
+    };
+
+    log(`firstChanged(${n}, ${initialPos}, ${depth})`);
+    let pos = initialPos;
+    const { genId } = nodeFact.getGenInfo(n);
+    log(
+      `- type=${n.type.name}, genId=${genId}, currGenId=${nodeFact.currGenId}`,
+    );
+
+    if (genId < nodeFact.currGenId) return -1; // Nothing changed in this subtree.
+
+    if (n.type.name === "text") return pos; // Found the first change!
+
+    // Not a text node, and something changed in this subtree.
+    for (const child of n.children) {
+      // pos + 1 to account for the opening of _this_ node.
+      const ans = firstChangedImpl(child, pos + 1, depth + 1);
+      if (ans !== -1) return ans; // Found it!
+      pos += child.nodeSize;
+    }
+    assert.equal(n.children.length, 0);
+    return pos;
+  }
+  // Per ProseMirror docs, "The start of the document, right before the first content, is position 0".
+  // But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
+  // when we enter the doc node.
+  return firstChangedImpl(startNode, -1);
 }
