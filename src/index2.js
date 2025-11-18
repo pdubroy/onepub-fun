@@ -116,7 +116,7 @@ function pmNode(nodeType, children) {
   genInfo.set(ans, {
     genId,
     minGenId,
-    parentGenId: genId // Only the root node won't have this overridden.
+    parentGenId: genId, // Only the root node won't have this overridden.
   });
 
   return ans;
@@ -132,14 +132,12 @@ semantics.addAttribute("pmNodes", {
     ];
     // The ProseMirror basic schema requires at least one paragraph in the document.
     if (children.length === 0) {
-      children.push(pmNode( "paragraph", []));
+      children.push(pmNode("paragraph", []));
     }
-    return pmNode( "doc", children);
+    return pmNode("doc", children);
   },
   header(title_content) {
-    return pmNode("paragraph", [
-      pmNode( "text", [title_content.sourceString]),
-    ]);
+    return pmNode("paragraph", [pmNode("text", [title_content.sourceString])]);
   },
   body(iterSectionBlock, optNl) {
     // No gen info, b/c there's no associated pmNode.
@@ -150,16 +148,16 @@ semantics.addAttribute("pmNodes", {
     return para.pmNodes;
   },
   paragraph(line) {
-    return pmNode( "paragraph", [line.pmNodes]);
+    return pmNode("paragraph", [line.pmNodes]);
   },
   line(iterAny) {
-    return pmNode( "text", [this.sourceString]);
+    return pmNode("text", [this.sourceString]);
   },
   _default(...children) {
     return children.flatMap((c) => c.pmNodes);
   },
   _terminal() {
-    return pmNode( "text", [this.sourceString]);
+    return pmNode("text", [this.sourceString]);
   },
 });
 
@@ -206,9 +204,7 @@ function firstChanged(n, initialPos, depth = 0) {
   log(`firstChanged(${n}, ${initialPos}, ${depth})`);
   let pos = initialPos;
   const { genId } = checkNotNull(genInfo.get(n));
-  log(
-    `- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`,
-  );
+  log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
 
   if (genId < currGenId) return -1; // Nothing changed in this subtree.
 
@@ -335,10 +331,8 @@ assert.equal(chSlice.endPos, 25); // Arguably could be 24 too.
 if (deletionType === DeletionType.REF_COUNTING) {
   const oldDoc = docs.at(-2);
 
-  const nonDeletions = [];
-
-  // Decrement the ref count of the given node, and determine the extents
-  // of any nodes that are no longer referenced.
+  // Given the given node which is known to be dead, walk its subtrees
+  // and find other nodes that are also dead.
   function detach(node, pos, depth = 0) {
     const log = (str) => {
       console.log("  ".repeat(depth) + str);
