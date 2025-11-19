@@ -9,7 +9,7 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
-import { NodeFactory, detach, firstChangedPos } from "./pmNodes.ts";
+import { NodeFactory, changedSlices, detach, firstChangedPos } from "./pmNodes.ts";
 
 const DeletionType = {
   MANUAL: 0,
@@ -83,14 +83,7 @@ const id = {
   line2: "h",
 };
 
-function checkNotNull(val, msg) {
-  if (val == null) throw new Error(msg || "Unexpected null value");
-  return val;
-}
-
 const semantics = g.createSemantics();
-
-const checkedGet = (map, key) => checkNotNull(map.get(key));
 
 // pmNodes represents the ProseMirror representation of the parse tree.
 // Ideally we would walk the AST here, not the CST.
@@ -184,35 +177,6 @@ function findPrecedingNode(rpos) {
   return null;
 }
 
-function changedSlice(doc) {
-  let startPos = firstChangedPos(pmNodes, doc);
-  let endPos = -1;
-
-  if (startPos !== -1) {
-    // TODO: Find a better way to do this. This will keep walking the children of any internal
-    // nodes on the path to the first reused node. But, the code is simpler for now.
-    doc.nodesBetween(startPos, doc.content.size, (node, pos) => {
-      if (endPos !== -1) return false; // already found, stop recursing into any nodes.
-
-      const { genId } = pmNodes.getGenInfo(node);
-
-      // This condition is a bit tricky. Ideally we want the lowest position that
-      // fully encompasses the change. If we find the first leaf node that is reused,
-      // we can subtract at least 1 (returning to the parent), and we can keep subtracting
-      // 1 as long as long as that would take us up to the parent.
-      // But, it's unclear whether that is required, or whether ProseMirror will handle
-      // the stitching automatically.
-
-      // There is a reused node in here.
-      if (genId !== pmNodes.currGenId && node.type.name === "text") {
-        endPos = pos - 1; // Found it!
-      }
-    });
-    if (endPos === -1) endPos = doc.content.size;
-  }
-  return { startPos, endPos };
-}
-
 let docs = [];
 
 let m = g.matcher();
@@ -268,10 +232,12 @@ let changedNode = root.pmNodes.nodeAt(changedPos);
       0          1          9          10    16          25         26
  */
 
-const chSlice = changedSlice(root.pmNodes);
+const slices = changedSlices(pmNodes, root.pmNodes);
+assert(slices.length === 1);
+const chSlice = slices[0];
 assert.equal(`${changedNode}`, '"Hello universe"');
 assert.equal(chSlice.startPos, 16 - "Hello ".length);
-assert.equal(chSlice.endPos, 25); // Arguably could be 24 too.
+assert.equal(chSlice.endPos, 26); // Arguably could be 24 too.
 
 if (deletionType === DeletionType.REF_COUNTING) {
   const oldDoc = docs.at(-2);
@@ -283,8 +249,8 @@ if (deletionType === DeletionType.REF_COUNTING) {
     const [from, to] = dead[0];
     const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
     // Not sure the best way to make sure that the open depths are correct.
-    // Randomly adding a +1 here fixed it.
-    const step = new ReplaceStep(from, to + 1, slice);
+    // Randomly adding a +2 here fixed it.
+    const step = new ReplaceStep(from, to + 2, slice);
     if (view) {
       view.dispatch(view.state.tr.step(step));
     }

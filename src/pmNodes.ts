@@ -122,10 +122,10 @@ export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
 
 // Given the given node which is known to be dead, walk its subtrees
 // and find other nodes that are also dead.
-export function detach(nodeFact: NodeFactory, doc: Node) {
+export function detach(nodeFact: NodeFactory, doc: Node): [number, number][] {
   function detachNode(node: Node, pos: number, depth = 0) {
     const log = (str: string) => {
-      console.log("  ".repeat(depth) + str);
+      // console.log("  ".repeat(depth) + str);
     };
     log(`[${node.type.name}] ${node} @ ${pos}`);
     const { parentGenId, genId } = nodeFact.getGenInfo(node);
@@ -144,6 +144,65 @@ export function detach(nodeFact: NodeFactory, doc: Node) {
     }
     return []; // Nothing is dead.
   }
-  console.log("---- detach");
   return detachNode(doc, -1);
+}
+
+export function changedSlices(
+  nodeFact: NodeFactory,
+  doc: Node,
+): { startPos: number; endPos: number }[] {
+  let foundStart = false;
+  const ans: { startPos: number; endPos: number }[] = [];
+
+  function walk(n: Node, initialPos: number, depth = 0): void {
+    const log = (str: string) => {
+      // console.log("  ".repeat(depth) + str);
+    };
+
+    log(`walk(${n}, ${initialPos}, ${depth})`);
+    let pos = initialPos;
+    const { genId, minGenId } = nodeFact.getGenInfo(n);
+    log(
+      `- type=${n.type.name}, genId=${genId}, currGenId=${nodeFact.currGenId}`,
+    );
+
+    // If we haven't found the start, we looking for the first node from the
+    // current generation. Once we've found the start, we look for the first
+    // node from an older generation.
+    if (
+      (!foundStart && genId < nodeFact.currGenId) ||
+      (foundStart && minGenId === nodeFact.currGenId)
+    ) {
+      return; // We don't care about this subtree.
+    }
+
+    // At this point, we know that this node or one of its descendants is relevant.
+
+    // If it's a text node, it marks the start/end.
+    if (n.type.name === "text") {
+      if (!foundStart) {
+        log("setting start");
+        foundStart = true;
+        ans.push({ startPos: pos, endPos: -1 });
+      } else {
+        log("setting end");
+        checkNotNull(ans.at(-1)).endPos = pos;
+      }
+      return;
+    }
+
+    // Not a text node, but one of its descendants is relevant.
+    for (const child of n.children) {
+      // pos + 1 to account for the opening of _this_ node.
+      walk(child, pos + 1, depth + 1);
+      pos += child.nodeSize;
+    }
+    return;
+  }
+  walk(doc, -1);
+  if (foundStart) {
+    const last = checkNotNull(ans.at(-1));
+    if (last.endPos === -1) last.endPos = doc.content.size;
+  }
+  return ans;
 }

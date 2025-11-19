@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { NodeFactory, detach, firstChangedPos } from "./pmNodes.ts";
+import {
+  NodeFactory,
+  changedSlices,
+  detach,
+  firstChangedPos,
+} from "./pmNodes.ts";
 import { Node } from "prosemirror-model";
 
 function* genFixtures(): Generator<[NodeFactory, Node]> {
@@ -49,8 +54,30 @@ test("detach", () => {
   assert.deepEqual(detach(pmNodes, doc), []);
 
   fixtures.next();
+
+  // Open question: should these be merged? Arguably we should return
+  // [0, 14] instead.
   assert.deepEqual(detach(pmNodes, doc2), [
     [1, 6], // "Hello"
     [8, 13], // "world"
   ]);
+});
+
+// - recurse into nodes that are from the current generation.
+// - don't recurse into things from the old gen.
+// - find the beginning of the text.
+// - then, use minGenId:
+//   * only recurse into nodes whose minGenId is < currGenId
+//   * find the first node whose genId is < currGenId
+test("changedSlices", () => {
+  const fixtures = genFixtures();
+  let [pmNodes, doc] = fixtures.next().value;
+  let [_, doc2] = fixtures.next().value;
+
+  let ans = changedSlices(pmNodes, doc2);
+  assert.deepEqual(ans, [{ startPos: 8, endPos: 14 }]);
+
+  let [_2, doc3] = fixtures.next().value;
+  ans = changedSlices(pmNodes, doc3);
+  assert.deepEqual(ans, []);
 });
