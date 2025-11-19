@@ -87,7 +87,9 @@ export class NodeFactory {
 // Return a ProseMirror document position that represents the boundary between the
 // old and new content in the doc — where "old" and "new" are defined by the generation
 // IDs tracked by the NodeFactory.
-export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
+export function firstChangedPos(nodeFact: NodeFactory, doc: Node) {
+  const currGenId = nodeFact.getGenInfo(doc).genId;
+
   function firstChangedImpl(n: Node, initialPos = -1, depth = 0) {
     const log = (str: string) => {
       // console.log("  ".repeat(depth) + str);
@@ -96,11 +98,9 @@ export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
     log(`firstChanged(${n}, ${initialPos}, ${depth})`);
     let pos = initialPos;
     const { genId } = nodeFact.getGenInfo(n);
-    log(
-      `- type=${n.type.name}, genId=${genId}, currGenId=${nodeFact.currGenId}`,
-    );
+    log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
 
-    if (genId < nodeFact.currGenId) return -1; // Nothing changed in this subtree.
+    if (genId < currGenId) return -1; // Nothing changed in this subtree.
 
     if (n.type.name === "text") return pos; // Found the first change!
 
@@ -117,22 +117,22 @@ export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
   // Per ProseMirror docs, "The start of the document, right before the first content, is position 0".
   // But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
   // when we enter the doc node.
-  return firstChangedImpl(startNode, -1);
+  return firstChangedImpl(doc, -1);
 }
 
 // Given the given node which is known to be dead, walk its subtrees
 // and find other nodes that are also dead.
 export function detach(nodeFact: NodeFactory, doc: Node): [number, number][] {
+  const oldGenId = nodeFact.getGenInfo(doc).genId;
+
   function detachNode(node: Node, pos: number, depth = 0) {
     const log = (str: string) => {
       // console.log("  ".repeat(depth) + str);
     };
     log(`[${node.type.name}] ${node} @ ${pos}`);
     const { parentGenId, genId } = nodeFact.getGenInfo(node);
-    log(
-      `genId=${genId}, parentGenId=${parentGenId}, currGenId=${nodeFact.currGenId}`,
-    );
-    if (parentGenId < nodeFact.currGenId) {
+    log(`genId=${genId}, parentGenId=${parentGenId}, oldGenId=${oldGenId}`);
+    if (parentGenId <= oldGenId) {
       if (node.type.name === "text") {
         return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
       }
@@ -151,6 +151,8 @@ export function changedSlices(
   nodeFact: NodeFactory,
   doc: Node,
 ): { startPos: number; endPos: number }[] {
+  const currGenId = nodeFact.getGenInfo(doc).genId;
+
   let foundStart = false;
   const ans: { startPos: number; endPos: number }[] = [];
 
@@ -162,16 +164,14 @@ export function changedSlices(
     log(`walk(${n}, ${initialPos}, ${depth})`);
     let pos = initialPos;
     const { genId, minGenId } = nodeFact.getGenInfo(n);
-    log(
-      `- type=${n.type.name}, genId=${genId}, currGenId=${nodeFact.currGenId}`,
-    );
+    log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
 
     // If we haven't found the start, we looking for the first node from the
     // current generation. Once we've found the start, we look for the first
     // node from an older generation.
     if (
-      (!foundStart && genId < nodeFact.currGenId) ||
-      (foundStart && minGenId === nodeFact.currGenId)
+      (!foundStart && genId < currGenId) ||
+      (foundStart && minGenId === currGenId)
     ) {
       return; // We don't care about this subtree.
     }
