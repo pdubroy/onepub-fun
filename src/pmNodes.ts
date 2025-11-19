@@ -119,3 +119,31 @@ export function firstChangedPos(nodeFact: NodeFactory, startNode: Node) {
   // when we enter the doc node.
   return firstChangedImpl(startNode, -1);
 }
+
+// Given the given node which is known to be dead, walk its subtrees
+// and find other nodes that are also dead.
+export function detach(nodeFact: NodeFactory, doc: Node) {
+  function detachNode(node: Node, pos: number, depth = 0) {
+    const log = (str: string) => {
+      console.log("  ".repeat(depth) + str);
+    };
+    log(`[${node.type.name}] ${node} @ ${pos}`);
+    const { parentGenId, genId } = nodeFact.getGenInfo(node);
+    log(
+      `genId=${genId}, parentGenId=${parentGenId}, currGenId=${nodeFact.currGenId}`,
+    );
+    if (parentGenId < nodeFact.currGenId) {
+      if (node.type.name === "text") {
+        return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
+      }
+      return node.children.flatMap((c) => {
+        const ans = detachNode(c, pos + 1, depth + 1);
+        pos += c.nodeSize;
+        return ans;
+      });
+    }
+    return []; // Nothing is dead.
+  }
+  console.log("---- detach");
+  return detachNode(doc, -1);
+}

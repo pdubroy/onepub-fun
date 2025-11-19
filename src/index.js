@@ -9,7 +9,7 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
-import { NodeFactory, firstChangedPos } from "./pmNodes.ts";
+import { NodeFactory, detach, firstChangedPos } from "./pmNodes.ts";
 
 const DeletionType = {
   MANUAL: 0,
@@ -276,27 +276,7 @@ assert.equal(chSlice.endPos, 25); // Arguably could be 24 too.
 if (deletionType === DeletionType.REF_COUNTING) {
   const oldDoc = docs.at(-2);
 
-  // Given the given node which is known to be dead, walk its subtrees
-  // and find other nodes that are also dead.
-  function detach(node, pos, depth = 0) {
-    const log = (str) => {
-      console.log("  ".repeat(depth) + str);
-    };
-    log(`[${node.type.name}] ${node} @ ${pos}`);
-    const { parentGenId } = pmNodes.getGenInfo(node);
-    if (parentGenId < pmNodes.currGenId) {
-      if (node.type.name === "text") {
-        return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
-      }
-      return node.children.flatMap((c) => {
-        const ans = detach(c, pos + 1, depth + 1);
-        pos += c.nodeSize;
-        return ans;
-      });
-    }
-    return []; // Nothing is dead.
-  }
-  const dead = detach(oldDoc, -1);
+  const dead = detach(pmNodes, oldDoc, -1);
   assert(dead.length === 1);
 
   if (view) {
