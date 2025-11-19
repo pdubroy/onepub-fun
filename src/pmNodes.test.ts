@@ -10,17 +10,22 @@ import { Node } from "prosemirror-model";
 
 function createTextFixture(nf: NodeFactory) {
   const par1 = nf.create("paragraph", [nf.create("text", "Hello")]);
-  const doc1 = nf.create("doc", [par1]);
+  const ans: Node[] = [];
+
+  ans.push(nf.create("doc", [par1]));
 
   nf.currGenId++;
-  const doc2 = nf.create("doc", [
-    par1,
-    nf.create("paragraph", [nf.create("text", "world")]),
-  ]);
+  ans.push(
+    nf.create("doc", [
+      par1,
+      nf.create("paragraph", [nf.create("text", "world")]),
+    ]),
+  );
 
   nf.currGenId++;
-  const doc3 = nf.create("doc", [nf.create("paragraph", [])]);
-  return [doc1, doc2, doc3];
+  ans.push(nf.create("doc", [nf.create("paragraph", [])]));
+
+  return ans;
 }
 
 test("firstChangedPos", () => {
@@ -68,5 +73,25 @@ test("changedSlices", () => {
   assert.deepEqual(ans, [{ startPos: 8, endPos: 14 }]);
 
   ans = changedSlices(pmNodes, docs[2]);
-  assert.deepEqual(ans, []);
+  // 0..2 fully surrounds the new, empty paragraph node.
+  assert.deepEqual(ans, [{ startPos: 0, endPos: 2 }]);
+
+  const oldPara = docs[2].children[0];
+  pmNodes.currGenId++;
+  const doc4 = pmNodes.create("doc", [
+    pmNodes.create("paragraph", [pmNodes.create("text", "[]")]),
+    oldPara,
+    pmNodes.create("paragraph", [pmNodes.create("text", "{}")]),
+  ]);
+
+  ans = changedSlices(pmNodes, doc4);
+  /*
+    doc(paragraph("[]"), paragraph(), paragraph("{}"))
+        ^          ^     ^         ^  ^          ^   ^
+        0          1     4         5  6          7   10
+  */
+  assert.deepEqual(ans, [
+    { startPos: 1, endPos: 4 },
+    { startPos: 7, endPos: 10 },
+  ]);
 });

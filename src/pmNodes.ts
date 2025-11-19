@@ -62,18 +62,11 @@ export class NodeFactory {
 
     if (nodeType !== "text") {
       assert(Array.isArray(textOrChildren));
-      textOrChildren.forEach((c) =>
-        console.log(`child: ${c}, in map? ${this.#genInfo.has(c)}`),
-      );
       ans.children.forEach((c, i) => {
-        console.log(`-> ${c}, in map? ${this.#genInfo.has(c)}`);
-        if (!this.#genInfo.has(c))
-          throw new Error(`child ${i} (${c}) missing genInfo`);
         this.getGenInfo(c).parentGenId = genId;
       });
       minGenId = Math.min(...ans.children.map((c) => this.getGenInfo(c).genId));
     }
-    console.log(`setting geninfo for ${ans}`);
     this.setGenInfo(ans, {
       genId,
       minGenId,
@@ -153,7 +146,7 @@ export function changedSlices(
 ): { startPos: number; endPos: number }[] {
   const currGenId = nodeFact.getGenInfo(doc).genId;
 
-  let foundStart = false;
+  let startPos = -1;
   const ans: { startPos: number; endPos: number }[] = [];
 
   function walk(n: Node, initialPos: number, depth = 0): void {
@@ -166,27 +159,28 @@ export function changedSlices(
     const { genId, minGenId } = nodeFact.getGenInfo(n);
     log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
 
-    // If we haven't found the start, we looking for the first node from the
+    // If we haven't found the start, we try to find the lowest-most node from the
     // current generation. Once we've found the start, we look for the first
     // node from an older generation.
     if (
-      (!foundStart && genId < currGenId) ||
-      (foundStart && minGenId === currGenId)
+      (startPos === -1 && genId < currGenId) ||
+      (startPos !== -1 && minGenId === currGenId)
     ) {
       return; // We don't care about this subtree.
     }
 
     // At this point, we know that this node or one of its descendants is relevant.
 
-    // If it's a text node, it marks the start/end.
-    if (n.type.name === "text") {
-      if (!foundStart) {
+    // If it has no children (maybe it's a text node), it marks the start/end.
+    if (n.children.length === 0) {
+      if (startPos === -1) {
         log("setting start");
-        foundStart = true;
-        ans.push({ startPos: pos, endPos: -1 });
+        startPos = pos;
+        ans.push({ startPos, endPos: -1 });
       } else {
         log("setting end");
         checkNotNull(ans.at(-1)).endPos = pos;
+        startPos = -1;
       }
       return;
     }
@@ -197,10 +191,9 @@ export function changedSlices(
       walk(child, pos + 1, depth + 1);
       pos += child.nodeSize;
     }
-    return;
   }
   walk(doc, -1);
-  if (foundStart) {
+  if (startPos !== -1) {
     const last = checkNotNull(ans.at(-1));
     if (last.endPos === -1) last.endPos = doc.content.size;
   }

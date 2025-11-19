@@ -233,7 +233,7 @@ let changedNode = root.pmNodes.nodeAt(changedPos);
  */
 
 const slices = changedSlices(pmNodes, root.pmNodes);
-assert(slices.length === 1);
+assert.equal(slices.length, 1);
 const chSlice = slices[0];
 assert.equal(`${changedNode}`, '"Hello universe"');
 assert.equal(chSlice.startPos, 16 - "Hello ".length);
