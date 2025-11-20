@@ -5,6 +5,7 @@ import {
   detach,
   firstChangedPos,
   NodeFactory,
+  transform,
 } from "./pmNodes.ts";
 import { Node } from "prosemirror-model";
 import { schema } from "prosemirror-schema-basic";
@@ -57,11 +58,8 @@ test("detach", () => {
   // Between doc2 and doc, there is no text deleted.
   assert.deepEqual(detach(pmNodes, docs[0]), []);
 
-  // Open question: should these be merged? Arguably we should return
-  // [0, 14] instead.
   assert.deepEqual(detach(pmNodes, docs[1]), [
-    [1, 6], // paragraph("Hello")
-    [8, 13], // paragraph("world")
+    { from: 0, to: 14, nodeType: "paragraph" },
   ]);
 });
 
@@ -96,7 +94,7 @@ test("changedSlices", () => {
   ]);
 });
 
-test.skip("transform", () => {
+test("transform", () => {
   const pmNodes = new NodeFactory();
   const docs = createTextFixture(pmNodes);
 
@@ -107,16 +105,15 @@ test.skip("transform", () => {
         ^          ^        ^          ^
         0          1        7          8
    */
-  // const [step] = transform(pmNodes, docs[0], docs[1]);
-  // let result = step.apply(docs[0]);
-  // assert.equal(`${result.doc}`, `${docs[1]}`);
+  const [step] = transform(pmNodes, docs[0], docs[1]);
+  let result = step.apply(docs[0]);
+  assert.equal(`${result.doc}`, `${docs[1]}`);
 
   let doc: Node = checkNotNull(docs[1]);
-  const steps = transform2(pmNodes, docs[1], docs[2]);
-  console.log(steps);
-  // for (const step of transform(pmNodes, docs[1], docs[2])) {
-  //   // console.log(step);
-  //   doc = checkNotNull(step.apply(doc).doc);
-  // }
-  // assert.equal(`${doc}`, `${docs[2]}`);
+  const steps = transform(pmNodes, docs[1], docs[2]);
+
+  for (const step of transform(pmNodes, docs[1], docs[2])) {
+    doc = checkNotNull(step.apply(doc).doc);
+  }
+  assert.equal(`${doc}`, `${docs[2]}`);
 });

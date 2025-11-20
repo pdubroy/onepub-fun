@@ -1,5 +1,5 @@
 import type { Node } from "prosemirror-model";
-import { Slice } from "prosemirror-model";
+import { Fragment, Slice } from "prosemirror-model";
 import { schema } from "prosemirror-schema-basic";
 import { ReplaceStep } from "prosemirror-transform";
 
@@ -115,12 +115,14 @@ export function firstChangedPos(nodeFact: NodeFactory, doc: Node) {
   return firstChangedImpl(doc, -1);
 }
 
+type DeletionRecord = { from: number; to: number; nodeType: string };
+
 // Given the given node which is known to be dead, walk its subtrees
 // and find other nodes that are also dead.
-export function detach(nodeFact: NodeFactory, doc: Node): [number, number][] {
+export function detach(nodeFact: NodeFactory, doc: Node): DeletionRecord[] {
   const oldGenId = nodeFact.getGenInfo(doc).genId;
 
-  function detachNode(node: Node, pos: number, depth = 0) {
+  function detachNode(node: Node, pos: number, depth = 0): DeletionRecord[] {
     const log = (str: string) => {
       // console.log("  ".repeat(depth) + str);
     };
@@ -129,13 +131,41 @@ export function detach(nodeFact: NodeFactory, doc: Node): [number, number][] {
     log(`genId=${genId}, parentGenId=${parentGenId}, oldGenId=${oldGenId}`);
     if (parentGenId <= oldGenId) {
       if (node.type.name === "text") {
-        return [[pos, pos + node.nodeSize]]; // Return the range(s) that are dead.
+        return [
+          { from: pos, to: pos + node.nodeSize, nodeType: node.type.name },
+        ]; // Return the range(s) that are dead.
       }
-      return node.children.flatMap((c) => {
-        const ans = detachNode(c, pos + 1, depth + 1);
+      pos += 1; // It's a non-leaf node, so account for the start token
+      const beforeFirstChild = pos;
+      const deletions: DeletionRecord[] = [];
+      for (const c of node.children) {
+        const ans = detachNode(c, pos, depth + 1);
+        if (deletions.length > 0 && ans.length > 0) {
+          const prev = checkNotNull(deletions.at(-1));
+          const next = ans[0];
+
+          // Merge adjacent ranges.
+          if (prev.to === next.from) {
+            prev.to = next.to;
+            ans.shift();
+          }
+        }
+        deletions.push(...ans);
         pos += c.nodeSize;
-        return ans;
-      });
+      }
+      // If there is a single deletion that covers all children, return a complete
+      // deletion of this node instead.
+      if (
+        node !== doc &&
+        deletions.length === 1 &&
+        deletions[0].from === beforeFirstChild &&
+        deletions[0].to === pos
+      ) {
+        return [
+          { from: beforeFirstChild - 1, to: pos + 1, nodeType: node.type.name },
+        ];
+      }
+      return deletions;
     }
     return []; // Nothing is dead.
   }
@@ -201,11 +231,11 @@ export function changedSlices(
       }
       return;
     }
+    pos += 1; // Non-leaf, so account for opening token.
 
     // Not a text node, but one of its descendants is relevant.
     for (const child of n.children) {
-      // pos + 1 to account for the opening of _this_ node.
-      walk(child, pos + 1, leftmostDepth + 1, depth + 1);
+      walk(child, pos, leftmostDepth + 1, depth + 1);
 
       // The goal is to pass this node's leftmostDepth + 1 to the first child, and
       // 0 to subsequent children. Setting it to -1 here achieves that.
@@ -225,10 +255,22 @@ export function changedSlices(
 export function transform(nodeFact: NodeFactory, oldDoc: Node, newDoc: Node) {
   const deletions = detach(nodeFact, oldDoc)
     .reverse()
-    .map(([from, to]) => new ReplaceStep(from, to, Slice.empty));
-  const additions = changedSlices(nodeFact, newDoc).map(
-    ({ startPos, endPos }) =>
-      new ReplaceStep(startPos, startPos, newDoc.slice(startPos, endPos)),
+    .map(({ from, to, nodeType }) => {
+      // Special case deletion of the entire content of the doc, because ProseMirror
+      // doesn't allow an empty doc with no children.
+      const slice =
+        from === 0 && to === oldDoc.content.size
+          ? new Slice(Fragment.from(schema.node("paragraph", null, [])), 0, 0)
+          : Slice.empty;
+      return new ReplaceStep(from, to, slice);
+    });
+  const additions = changedSlices(nodeFact, newDoc).flatMap(
+    ({ startPos, endPos }) => {
+      const slice = newDoc.slice(startPos, endPos);
+      return slice.toString() === "<paragraph>(0,0)"
+        ? []
+        : [new ReplaceStep(startPos, startPos, slice)];
+    },
   );
   return [...deletions, ...additions];
 }
