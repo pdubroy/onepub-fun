@@ -159,24 +159,6 @@ semantics.addOperation("pmEdit(offset, maxOffset)", {
   },
 });
 
-// Find the node that immediately precedes a given resolved position.
-function findPrecedingNode(rpos) {
-  if (rpos.nodeBefore) return rpos.nodeBefore; // No search necessary.
-
-  // Walk up the tree, looking for a preceding sibling at each level.
-  for (let depth = rpos.depth; depth >= 0; depth--) {
-    const idx = rpos.index(depth);
-
-    // Is there a preceding sibling at this level?
-    if (idx > 0) {
-      const parent = depth > 0 ? rpos.node(depth - 1) : rpos.doc;
-      return parent.child(idx - 1);
-    }
-  }
-
-  return null;
-}
-
 let docs = [];
 
 let m = g.matcher();
@@ -236,7 +218,7 @@ const slices = changedSlices(pmNodes, root.pmNodes);
 assert.equal(slices.length, 1);
 const chSlice = slices[0];
 assert.equal(`${changedNode}`, '"Hello universe"');
-assert.equal(chSlice.startPos, 16 - "Hello ".length);
+assert.equal(chSlice.startPos, 9);
 assert.equal(chSlice.endPos, 26); // Arguably could be 24 too.
 
 if (deletionType === DeletionType.REF_COUNTING) {
@@ -247,10 +229,10 @@ if (deletionType === DeletionType.REF_COUNTING) {
 
   if (view) {
     const [from, to] = dead[0];
-    const slice = root.pmNodes.slice(chSlice.startPos, chSlice.endPos, true);
     // Not sure the best way to make sure that the open depths are correct.
-    // Randomly adding a +2 here fixed it.
-    const step = new ReplaceStep(from, to + 2, slice);
+    // Randomly adding a +1 to the startPos here fixes it.
+    const slice = root.pmNodes.slice(chSlice.startPos + 1, chSlice.endPos, true);
+    const step = new ReplaceStep(from, to, slice);
     if (view) {
       view.dispatch(view.state.tr.step(step));
     }

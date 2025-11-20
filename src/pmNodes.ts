@@ -1,5 +1,7 @@
 import type { Node } from "prosemirror-model";
+import { Slice } from "prosemirror-model";
 import { schema } from "prosemirror-schema-basic";
+import { ReplaceStep } from "prosemirror-transform";
 
 function assert(cond: boolean, message?: string): asserts cond {
   if (!cond) throw new Error(message || "Assertion failed");
@@ -149,12 +151,27 @@ export function changedSlices(
   let startPos = -1;
   const ans: { startPos: number; endPos: number }[] = [];
 
-  function walk(n: Node, initialPos: number, depth = 0): void {
+  // `leftmostDepth` is used to ensure that startPos is pulled as high as possible.
+  // Consider the following example:
+  //     paragraph("Hello")
+  //     ^ 0        ^ 1
+  // If the text "Hello" is new, we don't want to use pos 1 as the startPos — we
+  // want to lift it into the parent and use pos 0.
+  // So, we use `leftmostDepth` to track how many levels the position could be
+  // lifted, if we detect a change at the very beginning of `n`.
+  function walk(
+    n: Node,
+    initialPos: number,
+    leftmostDepth = -1,
+    depth = 0,
+  ): void {
     const log = (str: string) => {
       // console.log("  ".repeat(depth) + str);
     };
 
-    log(`walk(${n}, ${initialPos}, ${depth})`);
+    log(
+      `walk(${n}, initialPos: ${initialPos}, leftmostDepth: ${leftmostDepth}, depth: ${depth})`,
+    );
     let pos = initialPos;
     const { genId, minGenId } = nodeFact.getGenInfo(n);
     log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
@@ -174,12 +191,12 @@ export function changedSlices(
     // If it has no children (maybe it's a text node), it marks the start/end.
     if (n.children.length === 0) {
       if (startPos === -1) {
-        log("setting start");
-        startPos = pos;
+        startPos = pos - leftmostDepth;
+        log(`set start to ${startPos}`);
         ans.push({ startPos, endPos: -1 });
       } else {
-        log("setting end");
         checkNotNull(ans.at(-1)).endPos = pos;
+        log(`set end to ${pos}`);
         startPos = -1;
       }
       return;
@@ -188,7 +205,12 @@ export function changedSlices(
     // Not a text node, but one of its descendants is relevant.
     for (const child of n.children) {
       // pos + 1 to account for the opening of _this_ node.
-      walk(child, pos + 1, depth + 1);
+      walk(child, pos + 1, leftmostDepth + 1, depth + 1);
+
+      // The goal is to pass this node's leftmostDepth + 1 to the first child, and
+      // 0 to subsequent children. Setting it to -1 here achieves that.
+      leftmostDepth = -1;
+
       pos += child.nodeSize;
     }
   }
@@ -198,4 +220,15 @@ export function changedSlices(
     if (last.endPos === -1) last.endPos = doc.content.size;
   }
   return ans;
+}
+
+export function transform(nodeFact: NodeFactory, oldDoc: Node, newDoc: Node) {
+  const deletions = detach(nodeFact, oldDoc)
+    .reverse()
+    .map(([from, to]) => new ReplaceStep(from, to, Slice.empty));
+  const additions = changedSlices(nodeFact, newDoc).map(
+    ({ startPos, endPos }) =>
+      new ReplaceStep(startPos, startPos, newDoc.slice(startPos, endPos)),
+  );
+  return [...deletions, ...additions];
 }

@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  NodeFactory,
   changedSlices,
   detach,
   firstChangedPos,
+  NodeFactory,
 } from "./pmNodes.ts";
 import { Node } from "prosemirror-model";
+import { schema } from "prosemirror-schema-basic";
+
+function checkNotNull<T>(val: T, msg?: string): NonNullable<T> {
+  if (val == null) throw new Error(msg || "Unexpected null value");
+  return val as NonNullable<T>;
+}
 
 function createTextFixture(nf: NodeFactory) {
   const par1 = nf.create("paragraph", [nf.create("text", "Hello")]);
@@ -54,23 +60,17 @@ test("detach", () => {
   // Open question: should these be merged? Arguably we should return
   // [0, 14] instead.
   assert.deepEqual(detach(pmNodes, docs[1]), [
-    [1, 6], // "Hello"
-    [8, 13], // "world"
+    [1, 6], // paragraph("Hello")
+    [8, 13], // paragraph("world")
   ]);
 });
 
-// - recurse into nodes that are from the current generation.
-// - don't recurse into things from the old gen.
-// - find the beginning of the text.
-// - then, use minGenId:
-//   * only recurse into nodes whose minGenId is < currGenId
-//   * find the first node whose genId is < currGenId
 test("changedSlices", () => {
   const pmNodes = new NodeFactory();
   const docs = createTextFixture(pmNodes);
 
   let ans = changedSlices(pmNodes, docs[1]);
-  assert.deepEqual(ans, [{ startPos: 8, endPos: 14 }]);
+  assert.deepEqual(ans, [{ startPos: 7, endPos: 14 }]);
 
   ans = changedSlices(pmNodes, docs[2]);
   // 0..2 fully surrounds the new, empty paragraph node.
@@ -91,7 +91,32 @@ test("changedSlices", () => {
         0          1     4         5  6          7   10
   */
   assert.deepEqual(ans, [
-    { startPos: 1, endPos: 4 },
-    { startPos: 7, endPos: 10 },
+    { startPos: 0, endPos: 4 },
+    { startPos: 6, endPos: 10 },
   ]);
+});
+
+test.skip("transform", () => {
+  const pmNodes = new NodeFactory();
+  const docs = createTextFixture(pmNodes);
+
+  /*
+    Positions *before* the indicated character:
+
+    doc(paragraph("Hello"), paragraph("world"))
+        ^          ^        ^          ^
+        0          1        7          8
+   */
+  // const [step] = transform(pmNodes, docs[0], docs[1]);
+  // let result = step.apply(docs[0]);
+  // assert.equal(`${result.doc}`, `${docs[1]}`);
+
+  let doc: Node = checkNotNull(docs[1]);
+  const steps = transform2(pmNodes, docs[1], docs[2]);
+  console.log(steps);
+  // for (const step of transform(pmNodes, docs[1], docs[2])) {
+  //   // console.log(step);
+  //   doc = checkNotNull(step.apply(doc).doc);
+  // }
+  // assert.equal(`${doc}`, `${docs[2]}`);
 });
