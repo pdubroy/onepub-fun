@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  changedSlices,
-  detach,
-  firstChangedPos,
-  NodeFactory,
-  transform,
-} from "./pmNodes.ts";
+import { changedSlices, detach, NodeFactory, transform } from "./pmNodes.ts";
 import { Node } from "prosemirror-model";
 import { schema } from "prosemirror-schema-basic";
 
@@ -34,22 +28,6 @@ function createTextFixture(nf: NodeFactory) {
 
   return ans;
 }
-
-test("firstChangedPos", () => {
-  const pmNodes = new NodeFactory();
-  const docs = createTextFixture(pmNodes);
-  /*
-    Positions *before* the indicated character:
-
-    doc(paragraph("Hello"), paragraph("world"))
-        ^          ^        ^          ^
-        0          1        7          8
-   */
-  assert.equal(firstChangedPos(pmNodes, docs[1]), 8);
-
-  // pos 0 is inside the doc, right before first child
-  assert.equal(firstChangedPos(pmNodes, docs[2]), 0);
-});
 
 test("detach", () => {
   const pmNodes = new NodeFactory();

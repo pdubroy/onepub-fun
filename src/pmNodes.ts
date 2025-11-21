@@ -7,7 +7,7 @@ function assert(cond: boolean, message?: string): asserts cond {
   if (!cond) throw new Error(message || "Assertion failed");
 }
 
-assert.equal = (a, b) => {
+assert.equal = <T>(a: T, b: T) => {
   if (a !== b) {
     throw new Error(`Assertion failed: ${a} !== ${b}`);
   }
@@ -77,42 +77,6 @@ export class NodeFactory {
 
     return ans;
   }
-}
-
-// Return a ProseMirror document position that represents the boundary between the
-// old and new content in the doc — where "old" and "new" are defined by the generation
-// IDs tracked by the NodeFactory.
-export function firstChangedPos(nodeFact: NodeFactory, doc: Node) {
-  const currGenId = nodeFact.getGenInfo(doc).genId;
-
-  function firstChangedImpl(n: Node, initialPos = -1, depth = 0) {
-    const log = (str: string) => {
-      // console.log("  ".repeat(depth) + str);
-    };
-
-    log(`firstChanged(${n}, ${initialPos}, ${depth})`);
-    let pos = initialPos;
-    const { genId } = nodeFact.getGenInfo(n);
-    log(`- type=${n.type.name}, genId=${genId}, currGenId=${currGenId}`);
-
-    if (genId < currGenId) return -1; // Nothing changed in this subtree.
-
-    if (n.type.name === "text") return pos; // Found the first change!
-
-    // Not a text node, and something changed in this subtree.
-    for (const child of n.children) {
-      // pos + 1 to account for the opening of _this_ node.
-      const ans = firstChangedImpl(child, pos + 1, depth + 1);
-      if (ans !== -1) return ans; // Found it!
-      pos += child.nodeSize;
-    }
-    assert.equal(n.children.length, 0);
-    return pos;
-  }
-  // Per ProseMirror docs, "The start of the document, right before the first content, is position 0".
-  // But that is *inside* the doc node. So you should start with initialPos = -1, because we will add 1
-  // when we enter the doc node.
-  return firstChangedImpl(doc, -1);
 }
 
 type DeletionRecord = { from: number; to: number; nodeType: string };
@@ -196,7 +160,7 @@ export function changedSlices(
     depth = 0,
   ): void {
     const log = (str: string) => {
-      console.log("  ".repeat(depth) + str);
+      // console.log("  ".repeat(depth) + str);
     };
 
     log(
@@ -271,7 +235,6 @@ export function transform(nodeFact: NodeFactory, oldDoc: Node, newDoc: Node) {
   const additions = changedSlices(nodeFact, newDoc).flatMap(
     ({ startPos, endPos }) => {
       const slice = newDoc.slice(startPos, endPos);
-      console.log(slice.openEnd);
       return slice.toString() === "<paragraph>(0,0)"
         ? []
         : [new ReplaceStep(startPos, startPos, slice)];
