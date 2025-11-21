@@ -11,9 +11,6 @@ import { Fragment, Slice } from "prosemirror-model";
 
 import {
   NodeFactory,
-  changedSlices,
-  detach,
-  firstChangedPos,
   transform,
 } from "./pmNodes.ts";
 
@@ -95,7 +92,7 @@ semantics.addAttribute("pmNodes", {
     ];
     // The ProseMirror basic schema requires at least one paragraph in the document.
     if (children.length === 0) {
-      children.push(create("paragraph", []));
+      children.push(pmNodes.create("paragraph", []));
     }
     return pmNodes.create("doc", children);
   },
@@ -185,7 +182,6 @@ const updateState = () => {
 updateState();
 
 console.log("FAKE EDIT ----");
-// m.replaceInputRange(15, 20, "universe");
 root = makeEdit(0, 0, "");
 updateState();
 
@@ -193,18 +189,6 @@ console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
 updateState();
 
-/*
 console.log("REAL EDIT #2 ----");
 root = makeEdit(0, 26, "");
-// updateView();
-if (view)
-  // This is the correct edit - replace the whole text.
-  view.dispatch(
-    view.state.tr.replaceRange(0, root.pmNodes.content.size, Slice.empty),
-  );
-
-// We should find the position just before the "Hello universe" text node.
-changedPos = firstChanged(root.pmNodes, -1);
-changedNode = root.pmNodes.nodeAt(0);
-assert.equal(`${changedNode}`, "paragraph");
-*/
+updateState();
