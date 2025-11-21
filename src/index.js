@@ -9,13 +9,13 @@ import { baseKeymap } from "prosemirror-commands";
 import { ReplaceStep } from "prosemirror-transform";
 import { Fragment, Slice } from "prosemirror-model";
 
-import { NodeFactory, changedSlices, detach, firstChangedPos } from "./pmNodes.ts";
-
-const DeletionType = {
-  MANUAL: 0,
-  REF_COUNTING: 2,
-};
-const deletionType = DeletionType.REF_COUNTING;
+import {
+  NodeFactory,
+  changedSlices,
+  detach,
+  firstChangedPos,
+  transform,
+} from "./pmNodes.ts";
 
 function assert(cond, message) {
   if (!cond) throw new Error(message || "Assertion failed");
@@ -100,10 +100,9 @@ semantics.addAttribute("pmNodes", {
     return pmNodes.create("doc", children);
   },
   header(title_content) {
-    return pmNodes.create(
-      "paragraph",
-      [pmNodes.create("text", title_content.sourceString)],
-    );
+    return pmNodes.create("paragraph", [
+      pmNodes.create("text", title_content.sourceString),
+    ]);
   },
   body(iterSectionBlock, optNl) {
     // No gen info, b/c there's no associated pmNode.
@@ -173,71 +172,26 @@ const makeEdit = (startIdx, endIdx, str) => {
 let root = makeEdit(0, 0, "= Title\n\nHello world\n\n!");
 console.log(`${docs.at(-1)}`);
 
-const intoTr = (edits) =>
-  edits.reduce((tr, step) => {
-    return tr.step(step);
-  }, state.tr);
-
-const updateView = () => {
-  if (view) view.dispatch(intoTr(root.pmEdit(0, view.state.doc.content.size)));
+const updateState = () => {
+  const initialTr = view ? view.state.tr : state.tr;
+  const steps = transform(pmNodes, docs.at(-2), docs.at(-1));
+  const tr = steps.reduce((tr, step) => tr.step(step), initialTr);
+  if (view) {
+    view.dispatch(tr);
+  } else {
+    state = state.apply(tr);
+  }
 };
-
-updateView();
+updateState();
 
 console.log("FAKE EDIT ----");
 // m.replaceInputRange(15, 20, "universe");
 root = makeEdit(0, 0, "");
-// updateView();
+updateState();
 
 console.log("REAL EDIT #1 ----");
 root = makeEdit(15, 20, "universe");
-// updateView();
-if (view && deletionType === DeletionType.MANUAL)
-  // This is the correct, minimal edit - replace `world` with `universe`.
-  view.dispatch(
-    view.state.tr.replaceRange(
-      16,
-      22,
-      new Slice(Fragment.from(schema.text("universe")), 0, 0),
-    ),
-  );
-
-// We should find the position just before the "Hello universe" text node.
-let changedPos = firstChangedPos(pmNodes, root.pmNodes);
-let changedNode = root.pmNodes.nodeAt(changedPos);
-
-/*
-  Positions *before* the indicated character:
-
-  doc(paragraph("= Title"), paragraph("Hello universe"), paragraph("!"))
-      ^          ^          ^          ^     ^           ^          ^
-      0          1          9          10    16          25         26
- */
-
-const slices = changedSlices(pmNodes, root.pmNodes);
-assert.equal(slices.length, 1);
-const chSlice = slices[0];
-assert.equal(`${changedNode}`, '"Hello universe"');
-assert.equal(chSlice.startPos, 9);
-assert.equal(chSlice.endPos, 26); // Arguably could be 24 too.
-
-if (deletionType === DeletionType.REF_COUNTING) {
-  const oldDoc = docs.at(-2);
-
-  const dead = detach(pmNodes, oldDoc, -1);
-  assert(dead.length === 1);
-
-  if (view) {
-    const [from, to] = dead[0];
-    // Not sure the best way to make sure that the open depths are correct.
-    // Randomly adding a +1 to the startPos here fixes it.
-    const slice = root.pmNodes.slice(chSlice.startPos + 1, chSlice.endPos, true);
-    const step = new ReplaceStep(from, to, slice);
-    if (view) {
-      view.dispatch(view.state.tr.step(step));
-    }
-  }
-}
+updateState();
 
 /*
 console.log("REAL EDIT #2 ----");

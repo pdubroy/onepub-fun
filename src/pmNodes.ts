@@ -196,7 +196,7 @@ export function changedSlices(
     depth = 0,
   ): void {
     const log = (str: string) => {
-      // console.log("  ".repeat(depth) + str);
+      console.log("  ".repeat(depth) + str);
     };
 
     log(
@@ -225,7 +225,7 @@ export function changedSlices(
         log(`set start to ${startPos}`);
         ans.push({ startPos, endPos: -1 });
       } else {
-        checkNotNull(ans.at(-1)).endPos = pos;
+        checkNotNull(ans.at(-1)).endPos = pos - leftmostDepth;
         log(`set end to ${pos}`);
         startPos = -1;
       }
@@ -253,24 +253,30 @@ export function changedSlices(
 }
 
 export function transform(nodeFact: NodeFactory, oldDoc: Node, newDoc: Node) {
-  const deletions = detach(nodeFact, oldDoc)
-    .reverse()
-    .map(({ from, to, nodeType }) => {
-      // Special case deletion of the entire content of the doc, because ProseMirror
-      // doesn't allow an empty doc with no children.
-      const slice =
-        from === 0 && to === oldDoc.content.size
-          ? new Slice(Fragment.from(schema.node("paragraph", null, [])), 0, 0)
-          : Slice.empty;
-      return new ReplaceStep(from, to, slice);
-    });
+  let steps: ReplaceStep[] = [];
+  if (oldDoc) {
+    const deletions = detach(nodeFact, oldDoc)
+      .reverse()
+      .map(({ from, to, nodeType }) => {
+        // Special case deletion of the entire content of the doc, because ProseMirror
+        // doesn't allow an empty doc with no children.
+        const slice =
+          from === 0 && to === oldDoc.content.size
+            ? new Slice(Fragment.from(schema.node("paragraph", null, [])), 0, 0)
+            : Slice.empty;
+        return new ReplaceStep(from, to, slice);
+      });
+    steps.push(...deletions);
+  }
   const additions = changedSlices(nodeFact, newDoc).flatMap(
     ({ startPos, endPos }) => {
       const slice = newDoc.slice(startPos, endPos);
+      console.log(slice.openEnd);
       return slice.toString() === "<paragraph>(0,0)"
         ? []
         : [new ReplaceStep(startPos, startPos, slice)];
     },
   );
-  return [...deletions, ...additions];
+  steps.push(...additions);
+  return steps;
 }
