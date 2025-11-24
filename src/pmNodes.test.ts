@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedSlices, detach, NodeFactory, transform } from "./pmNodes.ts";
 import { Node } from "prosemirror-model";
-import { schema } from "prosemirror-schema-basic";
 
-function checkNotNull<T>(val: T, msg?: string): NonNullable<T> {
-  if (val == null) throw new Error(msg || "Unexpected null value");
-  return val as NonNullable<T>;
-}
+import { checkNotNull } from "./assert.ts";
+import { changedSlices, detach, NodeFactory, transform } from "./pmNodes.ts";
 
 function createTextFixture(nf: NodeFactory) {
   const par1 = nf.create("paragraph", [nf.create("text", "Hello")]);

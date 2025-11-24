@@ -3,6 +3,8 @@ import { Fragment, Slice } from "prosemirror-model";
 import { schema } from "prosemirror-schema-basic";
 import { ReplaceStep } from "prosemirror-transform";
 
+import { checkNotNull } from "./assert.ts";
+
 function assert(cond: boolean, message?: string): asserts cond {
   if (!cond) throw new Error(message || "Assertion failed");
 }
@@ -12,11 +14,6 @@ assert.equal = <T>(a: T, b: T) => {
     throw new Error(`Assertion failed: ${a} !== ${b}`);
   }
 };
-
-function checkNotNull<T>(val: T, msg?: string): NonNullable<T> {
-  if (val == null) throw new Error(msg || "Unexpected null value");
-  return val as NonNullable<T>;
-}
 
 export interface GenInfo {
   genId: number;
