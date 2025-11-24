@@ -134,7 +134,7 @@ export function detach(nodeFact: NodeFactory, doc: Node): DeletionRecord[] {
   return detachNode(doc, -1);
 }
 
-export function changedSlices(
+export function getAdditions(
   nodeFact: NodeFactory,
   doc: Node,
 ): AdditionRecord[] {
@@ -243,7 +243,7 @@ export function transform(
       });
     steps.push(...deletions);
   }
-  const additions = changedSlices(nodeFact, newDoc).flatMap(({ from, to }) => {
+  const additions = getAdditions(nodeFact, newDoc).flatMap(({ from, to }) => {
     // console.log("Adding node from", from, "to", to);
     const slice = newDoc.slice(from, to);
     return slice.toString() === "<paragraph>(0,0)"

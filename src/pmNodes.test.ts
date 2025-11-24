@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Node } from "prosemirror-model";
 
 import { checkNotNull } from "./assert.ts";
-import { changedSlices, detach, NodeFactory, transform } from "./pmNodes.ts";
+import { getAdditions, detach, NodeFactory, transform } from "./pmNodes.ts";
 
 function createTextFixture(nf: NodeFactory) {
   const par1 = nf.create("paragraph", [nf.create("text", "Hello")]);
@@ -41,10 +41,10 @@ test("changedSlices", () => {
   const pmNodes = new NodeFactory();
   const docs = createTextFixture(pmNodes);
 
-  let ans = changedSlices(pmNodes, docs[1]);
+  let ans = getAdditions(pmNodes, docs[1]);
   assert.deepEqual(ans, [{ from: 7, to: 14 }]);
 
-  ans = changedSlices(pmNodes, docs[2]);
+  ans = getAdditions(pmNodes, docs[2]);
   // 0..2 fully surrounds the new, empty paragraph node.
   assert.deepEqual(ans, [{ from: 0, to: 2 }]);
 
@@ -56,7 +56,7 @@ test("changedSlices", () => {
     pmNodes.create("paragraph", [pmNodes.create("text", "{}")]),
   ]);
 
-  ans = changedSlices(pmNodes, doc4);
+  ans = getAdditions(pmNodes, doc4);
   /*
     doc(paragraph("[]"), paragraph(), paragraph("{}"))
         ^          ^     ^         ^  ^          ^   ^

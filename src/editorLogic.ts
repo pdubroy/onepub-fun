@@ -101,7 +101,6 @@ export function createEditor(
       return iterSectionBlock.children.flatMap((c: any) => c.pmNodes);
     },
     section_block(iterNl: any, para: any) {
-      // No gen info, b/c there's no associated pmNode.
       return para.pmNodes;
     },
     paragraph(line: any) {
