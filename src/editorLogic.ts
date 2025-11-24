@@ -138,9 +138,24 @@ export function createEditor(rootElement: HTMLElement) {
     updateState();
   };
 
+  const previewEdit = (edit: EditOp) => {
+    const { startIdx, endIdx, str } = edit;
+    m.replaceInputRange(startIdx, endIdx, str);
+    pmNodes.currGenId += 1;
+    const ans = semantics(m.match());
+    return ans.pmNodes;
+  };
+
+  const commitEdit = (newDoc: any) => {
+    docs.push(newDoc);
+    updateState();
+  };
+
+  const getCurrentDoc = () => (docs.length > 0 ? docs[docs.length - 1] : null);
+
   const destroy = () => {
     view.destroy();
   };
 
-  return { applyEdit, destroy };
+  return { applyEdit, previewEdit, commitEdit, getCurrentDoc, destroy };
 }
