@@ -10,7 +10,7 @@ export const TreePreview = (props: { node: any; title: string }) => {
         overflow: "auto",
       }}
     >
-      <h4>{props.title}</h4>
+      <h4 style={{ 'margin-top': 0 }}>{props.title}</h4>
       {props.node ? <TreeNode node={props.node} /> : <div>(empty)</div>}
     </div>
   );
