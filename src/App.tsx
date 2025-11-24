@@ -9,10 +9,11 @@ export default function App() {
   const [step, setStep] = createSignal(0);
   const [previewDoc, setPreviewDoc] = createSignal<any>(null);
   const [currentDoc, setCurrentDoc] = createSignal<any>(null);
+  const [pmDoc, setPmDoc] = createSignal<any>(null);
 
   onMount(() => {
     if (pmRoot) {
-      editor = createEditor(pmRoot);
+      editor = createEditor(pmRoot, setPmDoc);
       setCurrentDoc(editor.getCurrentDoc());
     }
   });
@@ -97,7 +98,7 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1 }}>
-          <h3>Tree View:</h3>
+          <h3>pmNodes:</h3>
           <div style={{ display: "flex", gap: "10px" }}>
             <TreePreview
               node={currentDoc()}
@@ -118,6 +119,9 @@ export default function App() {
           "min-height": "100px",
         }}
       ></div>
+
+      <h3 style={{ "margin-top": "20px" }}>Current Document Tree:</h3>
+      <TreePreview node={pmDoc()} title="Document Tree" />
     </div>
   );
 }

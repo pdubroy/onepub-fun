@@ -51,7 +51,10 @@ const g = ohm.grammar(String.raw`
 
 const semantics = g.createSemantics();
 
-export function createEditor(rootElement: HTMLElement) {
+export function createEditor(
+  rootElement: HTMLElement,
+  onDocChange: (doc: any) => void,
+) {
   let state = EditorState.create({
     schema,
     plugins: [
@@ -66,8 +69,11 @@ export function createEditor(rootElement: HTMLElement) {
     dispatchTransaction(transaction) {
       let newState = view.state.apply(transaction);
       view.updateState(newState);
+      onDocChange(newState.doc);
     },
   });
+
+  onDocChange(view.state.doc);
 
   const nf = new NodeFactory();
 
