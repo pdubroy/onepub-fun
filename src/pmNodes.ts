@@ -216,7 +216,7 @@ export function changedSlices(
   return ans;
 }
 
-export function transform(nodeFact: NodeFactory, oldDoc: Node, newDoc: Node) {
+export function transform(nodeFact: NodeFactory, oldDoc: Node | undefined, newDoc: Node) {
   let steps: ReplaceStep[] = [];
   if (oldDoc) {
     const deletions = detach(nodeFact, oldDoc)

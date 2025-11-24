@@ -30,16 +30,20 @@
     // "declarationMap": true,
 
     // Running in the DOM?
-    // "lib": ["es2022", "dom", "dom.iterable"]
+    "lib": ["es2022", "dom", "dom.iterable"],
 
     // Not running in the DOM?
-    "lib": ["es2022"],
+    // "lib": ["es2022"],
 
     // [End of totaltypescript rules]
 
     // Other stuff
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
+
+    // JSX for Solid
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
 
     // From https://nodejs.org/api/typescript.html
     // These options allow us to use Node.js type stripping, e.g. to run
