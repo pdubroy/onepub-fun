@@ -69,7 +69,7 @@ export function createEditor(rootElement: HTMLElement) {
     },
   });
 
-  const pmNodes = new NodeFactory();
+  const nf = new NodeFactory();
 
   // pmNodes represents the ProseMirror representation of the parse tree.
   // Ideally we would walk the AST here, not the CST.
@@ -81,13 +81,13 @@ export function createEditor(rootElement: HTMLElement) {
       ];
       // The ProseMirror basic schema requires at least one paragraph in the document.
       if (children.length === 0) {
-        children.push(pmNodes.create("paragraph", []));
+        children.push(nf.create("paragraph", []));
       }
-      return pmNodes.create("doc", children);
+      return nf.create("doc", children);
     },
     header(title_content: any) {
-      return pmNodes.create("paragraph", [
-        pmNodes.create("text", title_content.sourceString),
+      return nf.create("paragraph", [
+        nf.create("text", title_content.sourceString),
       ]);
     },
     body(iterSectionBlock: any, optNl: any) {
@@ -99,16 +99,16 @@ export function createEditor(rootElement: HTMLElement) {
       return para.pmNodes;
     },
     paragraph(line: any) {
-      return pmNodes.create("paragraph", [line.pmNodes]);
+      return nf.create("paragraph", [line.pmNodes]);
     },
     line(iterAny: any) {
-      return pmNodes.create("text", this.sourceString);
+      return nf.create("text", this.sourceString);
     },
     _default(...children: any[]) {
       return children.flatMap((c) => c.pmNodes);
     },
     _terminal() {
-      return pmNodes.create("text", this.sourceString);
+      return nf.create("text", this.sourceString);
     },
   });
 
@@ -118,32 +118,21 @@ export function createEditor(rootElement: HTMLElement) {
   const updateState = () => {
     const initialTr = view.state.tr;
 
-    const prevDoc = docs.length >= 2 ? docs[docs.length - 2] : undefined;
-    const currDoc = docs[docs.length - 1];
+    const prevDoc = docs.at(-2);
+    const currDoc = docs.at(-1);
 
-    const steps = transform(pmNodes, prevDoc, currDoc);
+    const steps = transform(nf, prevDoc, currDoc);
     const tr = steps.reduce((tr, step) => tr.step(step), initialTr);
 
     view.dispatch(tr);
   };
 
-  const applyEdit = (edit: EditOp) => {
-    const { startIdx, endIdx, str } = edit;
-    m.replaceInputRange(startIdx, endIdx, str);
-    pmNodes.currGenId += 1;
-    const ans = semantics(m.match());
-
-    docs.push(ans.pmNodes);
-
-    updateState();
-  };
-
   const previewEdit = (edit: EditOp) => {
     const { startIdx, endIdx, str } = edit;
     m.replaceInputRange(startIdx, endIdx, str);
-    pmNodes.currGenId += 1;
-    const ans = semantics(m.match());
-    return ans.pmNodes;
+    const ans = semantics(m.match()).pmNodes;
+    nf.currGenId += 1;
+    return ans;
   };
 
   const commitEdit = (newDoc: any) => {
@@ -157,5 +146,5 @@ export function createEditor(rootElement: HTMLElement) {
     view.destroy();
   };
 
-  return { applyEdit, previewEdit, commitEdit, getCurrentDoc, destroy };
+  return { previewEdit, commitEdit, getCurrentDoc, destroy };
 }

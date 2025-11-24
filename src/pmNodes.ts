@@ -80,6 +80,7 @@ export class NodeFactory {
 }
 
 type DeletionRecord = { from: number; to: number; nodeType: string };
+type AdditionRecord = { from: number; to: number };
 
 // Given the given node which is known to be dead, walk its subtrees
 // and find other nodes that are also dead.
@@ -139,11 +140,11 @@ export function detach(nodeFact: NodeFactory, doc: Node): DeletionRecord[] {
 export function changedSlices(
   nodeFact: NodeFactory,
   doc: Node,
-): { startPos: number; endPos: number }[] {
+): AdditionRecord[] {
   const currGenId = nodeFact.getGenInfo(doc).genId;
 
   let startPos = -1;
-  const ans: { startPos: number; endPos: number }[] = [];
+  const ans: AdditionRecord[] = [];
 
   // `leftmostDepth` is used to ensure that startPos is pulled as high as possible.
   // Consider the following example:
@@ -187,9 +188,9 @@ export function changedSlices(
       if (startPos === -1) {
         startPos = pos - leftmostDepth;
         log(`set start to ${startPos}`);
-        ans.push({ startPos, endPos: -1 });
+        ans.push({ from: startPos, to: -1 });
       } else {
-        checkNotNull(ans.at(-1)).endPos = pos - leftmostDepth;
+        checkNotNull(ans.at(-1)).to = pos - leftmostDepth;
         log(`set end to ${pos}`);
         startPos = -1;
       }
@@ -211,17 +212,30 @@ export function changedSlices(
   walk(doc, -1);
   if (startPos !== -1) {
     const last = checkNotNull(ans.at(-1));
-    if (last.endPos === -1) last.endPos = doc.content.size;
+    if (last.to === -1) last.to = doc.content.size;
   }
   return ans;
 }
 
-export function transform(nodeFact: NodeFactory, oldDoc: Node | undefined, newDoc: Node) {
+export function transform(
+  nodeFact: NodeFactory,
+  oldDoc: Node | undefined,
+  newDoc: Node,
+) {
+  if (
+    oldDoc &&
+    nodeFact.getGenInfo(oldDoc).genId === nodeFact.getGenInfo(newDoc).genId
+  ) {
+    return [];
+  }
+
   let steps: ReplaceStep[] = [];
   if (oldDoc) {
     const deletions = detach(nodeFact, oldDoc)
       .reverse()
       .map(({ from, to, nodeType }) => {
+        // console.log("Deleting node of type", nodeType, "from", from, "to", to);
+
         // Special case deletion of the entire content of the doc, because ProseMirror
         // doesn't allow an empty doc with no children.
         const slice =
@@ -232,14 +246,13 @@ export function transform(nodeFact: NodeFactory, oldDoc: Node | undefined, newDo
       });
     steps.push(...deletions);
   }
-  const additions = changedSlices(nodeFact, newDoc).flatMap(
-    ({ startPos, endPos }) => {
-      const slice = newDoc.slice(startPos, endPos);
-      return slice.toString() === "<paragraph>(0,0)"
-        ? []
-        : [new ReplaceStep(startPos, startPos, slice)];
-    },
-  );
+  const additions = changedSlices(nodeFact, newDoc).flatMap(({ from, to }) => {
+    // console.log("Adding node from", from, "to", to);
+    const slice = newDoc.slice(from, to);
+    return slice.toString() === "<paragraph>(0,0)"
+      ? []
+      : [new ReplaceStep(from, from, slice)];
+  });
   steps.push(...additions);
   return steps;
 }

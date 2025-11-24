@@ -46,11 +46,11 @@ test("changedSlices", () => {
   const docs = createTextFixture(pmNodes);
 
   let ans = changedSlices(pmNodes, docs[1]);
-  assert.deepEqual(ans, [{ startPos: 7, endPos: 14 }]);
+  assert.deepEqual(ans, [{ from: 7, to: 14 }]);
 
   ans = changedSlices(pmNodes, docs[2]);
   // 0..2 fully surrounds the new, empty paragraph node.
-  assert.deepEqual(ans, [{ startPos: 0, endPos: 2 }]);
+  assert.deepEqual(ans, [{ from: 0, to: 2 }]);
 
   const oldPara = docs[2].children[0];
   pmNodes.currGenId++;
@@ -67,8 +67,8 @@ test("changedSlices", () => {
         0          1     4         5  6          7   10
   */
   assert.deepEqual(ans, [
-    { startPos: 0, endPos: 4 },
-    { startPos: 6, endPos: 10 },
+    { from: 0, to: 4 },
+    { from: 6, to: 10 },
   ]);
 });
 
