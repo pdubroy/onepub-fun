@@ -30,6 +30,8 @@ The info in the `GenInfo` allows us to efficiently walk only the parts of the tw
 
 Note that combination of deletions and additions is not necessarily minimal, but it should be correct — i.e., it should leave the actual ProseMirror doc in the desired state.
 
+Also, in the new `pmNodes` tree, nodes are either completely unchanged, or completely new. So, an edit that affects only a portion of a text node (e.g. "Hello world" -> "Hello universe") is currently handled as deletion of "Hello world" followed by addition of "Hello universe". (This could be improved by finding a way to combine deletions with a matching addition at the same position.)
+
 ## Running demo, tests, etc.
 
 - `npm run dev`: run the demo, which lets you step through a few test changes and see the old & new trees computed by `pmNodes`.
