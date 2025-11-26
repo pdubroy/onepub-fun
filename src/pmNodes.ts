@@ -1,7 +1,8 @@
 import type { Node } from "prosemirror-model";
 import { Fragment, Slice } from "prosemirror-model";
-import { schema } from "prosemirror-schema-basic";
 import { ReplaceStep } from "prosemirror-transform";
+
+import { schema } from "./schema.ts";
 
 import { checkNotNull } from "./assert.ts";
 
@@ -232,23 +233,14 @@ export function transform(
       .reverse()
       .map(({ from, to, nodeType }) => {
         // console.log("Deleting node of type", nodeType, "from", from, "to", to);
-
-        // Special case deletion of the entire content of the doc, because ProseMirror
-        // doesn't allow an empty doc with no children.
-        const slice =
-          from === 0 && to === oldDoc.content.size
-            ? new Slice(Fragment.from(schema.node("paragraph", null, [])), 0, 0)
-            : Slice.empty;
-        return new ReplaceStep(from, to, slice);
+        return new ReplaceStep(from, to, Slice.empty);
       });
     steps.push(...deletions);
   }
   const additions = getAdditions(nodeFact, newDoc).flatMap(({ from, to }) => {
     // console.log("Adding node from", from, "to", to);
     const slice = newDoc.slice(from, to);
-    return slice.toString() === "<paragraph>(0,0)"
-      ? []
-      : [new ReplaceStep(from, from, slice)];
+    return [new ReplaceStep(from, from, slice)];
   });
   steps.push(...additions);
   return steps;
