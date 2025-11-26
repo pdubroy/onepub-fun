@@ -1,9 +1,11 @@
+import fc from "fast-check";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Node } from "prosemirror-model";
 
 import { checkNotNull } from "./assert.ts";
 import { getAdditions, detach, NodeFactory, transform } from "./pmNodes.ts";
+import { createSemantics, g } from "./asciidocLanguage.ts";
 
 function createTextFixture(nf: NodeFactory) {
   const par1 = nf.create("paragraph", [nf.create("text", "Hello")]);
@@ -90,4 +92,65 @@ test("transform", () => {
     doc = checkNotNull(step.apply(doc).doc);
   }
   assert.equal(`${doc}`, `${docs[2]}`);
+});
+
+test("fast-check: transform", async (t) => {
+  const arbHeader = fc.oneof(
+    fc.constant(""),
+    fc.string().map((s) => `= ${s}`),
+  );
+  const arbParagraphs = fc.array(fc.string());
+
+  // Generator for replacement text: either empty (representing deletion) or some string.
+  const arbText = fc.oneof(
+    fc.constant(""), // Deletion case.
+    fc
+      .tuple(arbHeader, arbParagraphs)
+      .map(([first, rest]) => [first, ...rest].join("\n\n")),
+  );
+
+  const arbEdit = fc
+    .tuple(fc.nat(), fc.integer({ min: 0, max: 20 }), arbText)
+    .map(([from, offset, content]) => ({ from, to: from + offset, content }));
+
+  const details = fc.check(
+    fc.property(fc.array(arbEdit), (ops) => {
+      const nf = new NodeFactory();
+      const semantics = createSemantics(nf);
+      const m = g.matcher();
+
+      // Initial state: empty document
+      let currentDoc = semantics(m.match()).pmNodes;
+      nf.currGenId++;
+
+      for (const op of ops) {
+        const textLen = m.getInput().length;
+
+        const startIdx = op.from % (textLen + 1);
+        const endIdx = Math.min(op.to, textLen);
+        m.replaceInputRange(startIdx, endIdx, op.content);
+
+        const match = m.match();
+        fc.pre(match.succeeded());
+
+        const nextDoc = semantics(match).pmNodes;
+        nf.currGenId++;
+
+        const steps = transform(nf, currentDoc, nextDoc);
+
+        let doc = currentDoc;
+        for (const step of steps) {
+          const res = step.apply(doc);
+          if (res.failed) throw new Error(`Step failed: ${res}`);
+          doc = checkNotNull(res.doc);
+        }
+
+        assert.equal(`${doc}`, `${nextDoc}`);
+        currentDoc = nextDoc;
+      }
+    }),
+    {
+      includeErrorInReport: true,
+    },
+  );
 });
